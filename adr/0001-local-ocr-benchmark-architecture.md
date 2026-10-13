@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Revised by: [ADR-0002](0002-two-layer-edi-field-benchmark.md) (Proposed) revises §1, §2, §4,
+  §8, §9, and parts of §5 and §6. Sections it does not revise remain in force.
 
 ## Context
 
