@@ -6,7 +6,7 @@
 | ADR | ADR-0002 §1, §6, §8 |
 | Depends on | T21 |
 | Followed by | T24, T25 |
-| Main outputs | `src/ocrbench/ocr/` (tesseract, paddle, qwen_vl, mistral), optional extras in `pyproject.toml` |
+| Main outputs | `src/ocrbench/ocr_engines.py` (Tesseract, PaddleOCR, Qwen-VL, Mistral), `docs/windows-setup.md` §11 |
 
 ## Goal
 
@@ -14,8 +14,9 @@ Implement the Layer 1 candidates A1–A4 behind the `OcrEngine` protocol.
 
 ## Implementation
 
-1. Optional extras: `tesseract`, `paddle`, `mistral`. Import lazily; a missing extra
-   gives a clear error naming the install command.
+1. No new dependencies (ADR-0002 §8): Tesseract via its command-line program,
+   Mistral via `urllib`, PaddleOCR imported lazily. A missing engine gives a clear
+   error pointing to `docs/windows-setup.md`.
 2. Tesseract (A1): Japanese + English language data; record engine and language versions.
 3. PaddleOCR (A2): Japanese model; record model version.
 4. Qwen-VL transcribe-only (A3): existing Ollama adapter, a fixed transcription prompt
@@ -29,4 +30,4 @@ Implement the Layer 1 candidates A1–A4 behind the `OcrEngine` protocol.
 ## Acceptance criteria
 
 - Tests prove the Mistral lock refuses each missing condition.
-- `uv sync` without extras still passes all four quality gates.
+- `uv sync` alone still passes all four quality gates; `uv.lock` is unchanged.

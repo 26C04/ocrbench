@@ -182,10 +182,11 @@ inconclusive, the local pipeline wins.
   not part of this workflow. Their code (`selection.py`, `ocrbench select`,
   `ocrbench loop`) and tests stay in the repository and keep passing. Removing
   them requires a separate decision.
-- Dependencies: the 4 core runtime dependencies stay. OCR engines are optional
-  extras (for example `ocrbench[tesseract]`, `ocrbench[paddle]`,
-  `ocrbench[mistral]`), so a default install and CI need none of them. CI uses
-  fake pipelines only.
+- Dependencies: the 4 core runtime dependencies stay, and the OCR engines add
+  none. Tesseract runs as an external program, Qwen-VL goes through the existing
+  Ollama adapter, Mistral OCR uses the standard library's HTTP client, and
+  PaddleOCR is installed separately on the benchmark machine and imported only
+  when used. A default install and CI need none of them; CI uses fakes only.
 
 ## Open decisions
 
