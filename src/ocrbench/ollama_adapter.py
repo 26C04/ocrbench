@@ -77,6 +77,21 @@ class OllamaAdapter(Protocol):
         """Return the local Ollama server version."""
 
 
+class TextLlm(Protocol):
+    """Text-only structured generation used by Layer 2 of the two-layer design."""
+
+    def generate_structured_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        format_schema: dict[str, Any],
+        seed: int,
+        temperature: float = 0.0,
+    ) -> ChatResult:
+        """Generate one structured response from text alone, without retries."""
+
+
 class _VersionResponse(BaseModel):
     """Typed response for the version endpoint absent from the locked 0.6.x client API."""
 
@@ -100,9 +115,44 @@ class RealOllamaAdapter:
         temperature: float = 0.0,
     ) -> ChatResult:
         """Issue exactly one chat call and preserve the model's raw text output."""
+        return self._chat(
+            model=model,
+            message={"role": "user", "content": prompt, "images": [image_png]},
+            format_schema=format_schema,
+            seed=seed,
+            temperature=temperature,
+        )
+
+    def generate_structured_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        format_schema: dict[str, Any],
+        seed: int,
+        temperature: float = 0.0,
+    ) -> ChatResult:
+        """Issue exactly one text-only chat call and preserve the raw text output."""
+        return self._chat(
+            model=model,
+            message={"role": "user", "content": prompt},
+            format_schema=format_schema,
+            seed=seed,
+            temperature=temperature,
+        )
+
+    def _chat(
+        self,
+        *,
+        model: str,
+        message: dict[str, Any],
+        format_schema: dict[str, Any],
+        seed: int,
+        temperature: float,
+    ) -> ChatResult:
         response = self._client.chat(
             model=model,
-            messages=[{"role": "user", "content": prompt, "images": [image_png]}],
+            messages=[message],
             format=format_schema,
             options={"temperature": temperature, "seed": seed},
             think=False,
@@ -204,6 +254,29 @@ class FakeOllamaAdapter:
         temperature: float = 0.0,
     ) -> ChatResult:
         """Record one call and return the next deterministic fake result."""
+        return self._respond(model, prompt, format_schema, seed, temperature, len(image_png))
+
+    def generate_structured_text(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        format_schema: dict[str, Any],
+        seed: int,
+        temperature: float = 0.0,
+    ) -> ChatResult:
+        """Record one text-only call (``image_size`` 0) and return the next fake result."""
+        return self._respond(model, prompt, format_schema, seed, temperature, 0)
+
+    def _respond(
+        self,
+        model: str,
+        prompt: str,
+        format_schema: dict[str, Any],
+        seed: int,
+        temperature: float,
+        image_size: int,
+    ) -> ChatResult:
         self.calls.append(
             FakeCall(
                 model=model,
@@ -211,7 +284,7 @@ class FakeOllamaAdapter:
                 schema=copy.deepcopy(format_schema),
                 seed=seed,
                 temperature=temperature,
-                image_size=len(image_png),
+                image_size=image_size,
             )
         )
         if self._always_response is not None:

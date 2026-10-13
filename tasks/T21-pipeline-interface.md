@@ -6,7 +6,7 @@
 | ADR | ADR-0002 §1 |
 | Depends on | T20 |
 | Followed by | T22, T24 |
-| Main outputs | `src/ocrbench/pipelines/` (protocol, OCR+LLM, vision, external command, fake) |
+| Main outputs | `src/ocrbench/pipelines.py` (protocols, OCR+LLM, vision, external command, fakes), `TextLlm` in `ollama_adapter.py` |
 
 ## Goal
 
