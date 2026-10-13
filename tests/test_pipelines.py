@@ -139,6 +139,25 @@ def test_ocr_llm_layer1_error_does_not_leak_message() -> None:
     assert result.status is PipelineStatus.ERROR
     assert result.error == "layer 1 failed: RuntimeError"
     assert result.attempts == 0
+    assert result.cost_usd == 0.0
+
+
+class _BilledOcr(_BrokenOcr):
+    def transcribe(self, image: PreprocessResult) -> OcrResult:
+        from ocrbench.ocr_engines import OcrEngineError
+
+        raise OcrEngineError("unusable response", cost_usd=0.004)
+
+
+def test_ocr_llm_layer1_error_keeps_the_billed_cost() -> None:
+    pipeline = OcrLlmPipeline(
+        pipeline_id="A4", ocr=_BilledOcr(), llm=FakeOllamaAdapter(), model="m", instructions="i"
+    )
+
+    result = pipeline.extract(IMAGE)
+
+    assert result.status is PipelineStatus.ERROR
+    assert result.cost_usd == 0.004
 
 
 def test_ocr_llm_layer2_error_keeps_layer1_text() -> None:

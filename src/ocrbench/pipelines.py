@@ -106,7 +106,8 @@ def layer2_prompt(instructions: str, ocr_text: str) -> str:
     return f"{instructions.rstrip()}\n\n{OCR_TEXT_HEADER}\n{ocr_text}"
 
 
-def _elapsed_ms(started_ns: int) -> float:
+def elapsed_ms(started_ns: int) -> float:
+    """Milliseconds since a ``perf_counter_ns`` start; shared by every timed layer."""
     return (perf_counter_ns() - started_ns) / 1_000_000
 
 
@@ -163,10 +164,10 @@ class OcrLlmPipeline:
                 status=PipelineStatus.ERROR,
                 fields=None,
                 layer1_text=None,
-                layer1_ms=_elapsed_ms(started),
+                layer1_ms=elapsed_ms(started),
                 layer2_ms=None,
-                total_ms=_elapsed_ms(started),
-                cost_usd=0.0,
+                total_ms=elapsed_ms(started),
+                cost_usd=float(getattr(caught, "cost_usd", 0.0)),
                 attempts=0,
                 error=f"layer 1 failed: {_error_name(caught)}",
             )
@@ -206,8 +207,8 @@ class OcrLlmPipeline:
             fields=fields,
             layer1_text=ocr.text,
             layer1_ms=ocr.duration_ms,
-            layer2_ms=_elapsed_ms(layer2_started),
-            total_ms=_elapsed_ms(started),
+            layer2_ms=elapsed_ms(layer2_started),
+            total_ms=elapsed_ms(started),
             cost_usd=ocr.cost_usd,
             attempts=len(raw_outputs) + (1 if error is not None else 0),
             raw_outputs=tuple(raw_outputs),
@@ -296,7 +297,7 @@ class VisionPipeline:
             status = PipelineStatus.FORMAT_ERROR
         else:
             fields, status = order_document_to_edi(document)
-        elapsed = _elapsed_ms(started)
+        elapsed = elapsed_ms(started)
         return PipelineResult(
             status=status,
             fields=fields,
@@ -396,7 +397,7 @@ class ExternalCommandPipeline:
             if output.status == "needs_review" or output.fields is None
             else _status_for(output.fields)
         )
-        elapsed = _elapsed_ms(started)
+        elapsed = elapsed_ms(started)
         return PipelineResult(
             status=status,
             fields=output.fields,
@@ -415,7 +416,7 @@ class ExternalCommandPipeline:
             layer1_text=None,
             layer1_ms=None,
             layer2_ms=None,
-            total_ms=_elapsed_ms(started),
+            total_ms=elapsed_ms(started),
             cost_usd=0.0,
             attempts=1,
             error=reason,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import http.client
+import importlib.metadata
 import io
 import json
 import shutil
@@ -10,6 +12,7 @@ import sys
 import types
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -72,19 +75,66 @@ def test_tesseract_sends_png_on_stdin_and_reads_stdout() -> None:
     assert kwargs["check"] is False
 
 
-def test_tesseract_describe_reads_version_once() -> None:
-    runner = _FakeRunner(_done(b"tesseract 5.3.4\n leptonica-1.82.0\n"))
+def _tessdata(tmp_path: Path, *langs: str) -> subprocess.CompletedProcess[bytes]:
+    for lang in langs:
+        (tmp_path / f"{lang}.traineddata").write_bytes(f"model-{lang}".encode())
+    listing = f'List of available languages in "{tmp_path}/" ({len(langs)}):\n'
+    return _done((listing + "\n".join(langs) + "\n").encode())
+
+
+def test_tesseract_describe_records_version_and_language_data_once(tmp_path: Path) -> None:
+    runner = _FakeRunner(
+        _done(b"tesseract 5.3.4\n leptonica-1.82.0\n"), _tessdata(tmp_path, "jpn", "eng")
+    )
     engine = TesseractEngine(runner=runner)
 
-    assert engine.describe() == {
-        "name": "tesseract",
-        "version": "tesseract 5.3.4",
-        "languages": "jpn+eng",
-        "psm": "6",
-    }
-    assert engine.describe()["version"] == "tesseract 5.3.4"
-    assert len(runner.calls) == 1
+    description = engine.describe()
+
+    assert description["version"] == "tesseract 5.3.4"
+    assert description["languages"] == "jpn+eng"
+    assert description["psm"] == "6"
+    assert description["data.jpn"].startswith("sha256:")
+    assert description["data.jpn"] != description["data.eng"]
+    assert engine.describe() == description
+    assert [call[0][1] for call in runner.calls] == ["--version", "--list-langs"]
     assert engine.engine_id == "tesseract"
+
+
+def test_tesseract_language_data_changes_with_the_file(tmp_path: Path) -> None:
+    first = TesseractEngine(languages="jpn", runner=_FakeRunner(_tessdata(tmp_path, "jpn")))
+    before = first.language_data()["jpn"]
+    (tmp_path / "jpn.traineddata").write_bytes(b"best model")
+    second = TesseractEngine(languages="jpn", runner=_FakeRunner(_tessdata(tmp_path)))
+
+    assert second.language_data()["jpn"] != before
+
+
+@pytest.mark.parametrize(
+    ("outcome", "message"),
+    [
+        (_done(b"", returncode=1), "tesseract version unavailable"),
+        (_done(b"   \n", returncode=0), "tesseract version unavailable"),
+    ],
+)
+def test_tesseract_version_failures_raise_and_are_not_cached(
+    outcome: subprocess.CompletedProcess[bytes], message: str
+) -> None:
+    runner = _FakeRunner(outcome, _done(b"tesseract 5.3.4\n"))
+    engine = TesseractEngine(runner=runner)
+
+    with pytest.raises(OcrEngineError, match=message):
+        engine.version()
+    assert engine.version() == "tesseract 5.3.4"
+
+
+def test_tesseract_language_data_failures(tmp_path: Path) -> None:
+    missing = TesseractEngine(languages="jpn", runner=_FakeRunner(_tessdata(tmp_path)))
+    with pytest.raises(OcrEngineError, match="language data 'jpn' is not installed"):
+        missing.language_data()
+
+    no_folder = TesseractEngine(runner=_FakeRunner(_done(b"jpn\neng\n")))
+    with pytest.raises(OcrEngineError, match="did not report its tessdata folder"):
+        no_folder.language_data()
 
 
 @pytest.mark.parametrize(
@@ -118,7 +168,12 @@ def test_qwen_vl_transcribes_with_fixed_prompt_and_seed() -> None:
     assert call.temperature == 0.0
     assert call.image_size == len(IMAGE.png_bytes)
     assert call.schema["required"] == ["text"]
-    assert engine.describe()["model"] == "qwen2.5vl:7b"
+    assert engine.describe() == {
+        "name": "qwen-vl-transcribe",
+        "model": "qwen2.5vl:7b",
+        "digest": "sha256:fake",
+        "seed": str(config.SEED),
+    }
     assert engine.engine_id == "qwen-vl"
 
 
@@ -210,6 +265,7 @@ def test_mistral_rechecks_locks_before_each_call(monkeypatch: pytest.MonkeyPatch
         (urllib.error.HTTPError(MISTRAL_OCR_URL, 401, "no", {}, None), "HTTP 401"),  # type: ignore[arg-type]
         (urllib.error.URLError("down"), "could not be reached"),
         (TimeoutError(), "could not be reached"),
+        (http.client.IncompleteRead(b"partial"), "could not be reached"),
     ],
 )
 def test_mistral_network_errors_hide_details(error: BaseException, message: str) -> None:
@@ -219,6 +275,7 @@ def test_mistral_network_errors_hide_details(error: BaseException, message: str)
     with pytest.raises(OcrEngineError, match=message) as caught:
         MistralOcrEngine(confirmed=True, post=post).transcribe(IMAGE)
     assert "test-key-123" not in str(caught.value)
+    assert caught.value.cost_usd == 0.0
 
 
 @pytest.mark.usefixtures("cloud_env")
@@ -226,16 +283,30 @@ def test_mistral_network_errors_hide_details(error: BaseException, message: str)
 def test_mistral_unexpected_responses(body: bytes) -> None:
     engine = MistralOcrEngine(confirmed=True, post=lambda request, timeout_s: body)
 
-    with pytest.raises(OcrEngineError, match="unexpected response"):
+    with pytest.raises(OcrEngineError, match="unexpected response") as caught:
         engine.transcribe(IMAGE)
+    assert caught.value.cost_usd == DEFAULT_MISTRAL_USD_PER_PAGE
 
 
-def _fake_paddle(monkeypatch: pytest.MonkeyPatch, result: object, *, v3: bool = True) -> None:
+class _FakeArray:
+    def __init__(self, image: Image.Image) -> None:
+        self.first_pixel = image.getpixel((0, 0))
+
+
+def _fake_paddle(
+    monkeypatch: pytest.MonkeyPatch, result: object, *, v3: bool = True, broken: bool = False
+) -> tuple[list[object], list[dict[str, str]]]:
+    inputs: list[object] = []
+    constructed: list[dict[str, str]] = []
+
     class Reader:
-        def __init__(self, lang: str) -> None:
-            self.lang = lang
+        def __init__(self, **options: str) -> None:
+            constructed.append(options)
+            if broken:
+                raise OSError("model download failed")
 
-        def ocr(self, path: str) -> object:
+        def ocr(self, image: object) -> object:
+            inputs.append(image)
             if isinstance(result, Exception):
                 raise result
             return result
@@ -244,34 +315,82 @@ def _fake_paddle(monkeypatch: pytest.MonkeyPatch, result: object, *, v3: bool = 
         Reader.predict = Reader.ocr  # type: ignore[attr-defined]
     module = types.ModuleType("paddleocr")
     module.PaddleOCR = Reader  # type: ignore[attr-defined]
-    module.__version__ = "3.0.0"  # type: ignore[attr-defined]
+    numpy = types.ModuleType("numpy")
+    numpy.asarray = _FakeArray  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "paddleocr", module)
+    monkeypatch.setitem(sys.modules, "numpy", numpy)
+    return inputs, constructed
 
 
-def test_paddle_reads_v3_result_shape(monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_paddle(monkeypatch, [{"rec_texts": ["受注先", "Nidec"]}])
-    engine = PaddleOcrEngine()
+def _red_png() -> PreprocessResult:
+    buffer = io.BytesIO()
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(buffer, format="PNG")
+    return PreprocessResult(buffer.getvalue(), 4, 4, "image", 0.0, "v1")
 
-    assert engine.transcribe(IMAGE).text == "受注先\nNidec"
-    assert engine.describe() == {"name": "paddleocr", "version": "3.0.0", "lang": "japan"}
+
+def test_paddle_reads_v3_result_from_an_in_memory_bgr_array(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inputs, constructed = _fake_paddle(monkeypatch, [{"rec_texts": ["受注先", "Nidec"]}])
+    engine = PaddleOcrEngine(ocr_version="PP-OCRv5")
+
+    assert engine.transcribe(_red_png()).text == "受注先\nNidec"
+    array = inputs[0]
+    assert isinstance(array, _FakeArray)
+    assert array.first_pixel == (0, 0, 255)
+    assert constructed == [{"lang": "japan", "ocr_version": "PP-OCRv5"}]
     assert engine.engine_id == "paddleocr"
+
+
+def test_paddle_describe_needs_no_model_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    versions = {"paddleocr": "3.0.0"}
+
+    def fake_version(package: str) -> str:
+        if package not in versions:
+            raise importlib.metadata.PackageNotFoundError(package)
+        return versions[package]
+
+    monkeypatch.setattr(importlib.metadata, "version", fake_version)
+
+    assert PaddleOcrEngine().describe() == {
+        "name": "paddleocr",
+        "version": "3.0.0",
+        "paddlepaddle": "not installed",
+        "lang": "japan",
+        "ocr_version": "default",
+    }
 
 
 def test_paddle_reads_v2_result_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     box = [[0, 0], [1, 0], [1, 1], [0, 1]]
     _fake_paddle(monkeypatch, [[[box, ("部番", 0.99)], [box, ("HR237101021", 0.98)]]], v3=False)
 
-    assert PaddleOcrEngine().transcribe(IMAGE).text == "部番\nHR237101021"
+    assert PaddleOcrEngine().transcribe(_red_png()).text == "部番\nHR237101021"
 
 
-def test_paddle_failure_and_missing_install(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_paddle_sheet_failure_hides_details(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_paddle(monkeypatch, RuntimeError("023235 leaked"))
-    with pytest.raises(OcrEngineError, match="PaddleOCR failed on this sheet"):
-        PaddleOcrEngine().transcribe(IMAGE)
 
+    with pytest.raises(OcrEngineError, match="PaddleOCR failed on this sheet") as caught:
+        PaddleOcrEngine().transcribe(_red_png())
+    assert "023235" not in str(caught.value)
+
+
+def test_paddle_start_failure_is_wrapped_and_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, constructed = _fake_paddle(monkeypatch, [], broken=True)
+    engine = PaddleOcrEngine()
+
+    for _ in range(2):
+        with pytest.raises(OcrEngineError, match="PaddleOCR could not start"):
+            engine.transcribe(_red_png())
+    assert len(constructed) == 1
+
+
+def test_paddle_missing_install(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "paddleocr", None)
+
     with pytest.raises(OcrEngineError, match="PaddleOCR is not installed"):
-        PaddleOcrEngine().transcribe(IMAGE)
+        PaddleOcrEngine().transcribe(_red_png())
 
 
 def _png_with_text(text: str) -> bytes:

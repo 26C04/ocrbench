@@ -9,35 +9,48 @@ Error messages name the failure, never the sheet's content.
 from __future__ import annotations
 
 import base64
+import hashlib
+import http.client
+import importlib
+import importlib.metadata
+import io
 import json
 import os
+import re
 import subprocess
-import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 from time import perf_counter_ns
 from typing import Any, Final
 
+from PIL import Image
+
 from ocrbench import config
 from ocrbench.config import OcrBenchError
 from ocrbench.ollama_adapter import OllamaAdapter
-from ocrbench.pipelines import OcrResult
+from ocrbench.pipelines import OcrResult, elapsed_ms
 from ocrbench.preprocess import PreprocessResult
 
 
 class OcrEngineError(OcrBenchError):
-    """Raised when an OCR engine cannot produce text for a sheet."""
+    """Raised when an OCR engine cannot produce text for a sheet.
+
+    ``cost_usd`` is what the failed call was still billed, so a paid engine's
+    cost per sheet stays correct when its response cannot be used.
+    """
+
+    def __init__(self, message: str, *, cost_usd: float = 0.0) -> None:
+        super().__init__(message)
+        self.cost_usd = cost_usd
 
 
 class CloudNotAllowedError(OcrEngineError):
     """Raised when a cloud engine is used without every required approval."""
 
 
-def _elapsed_ms(started_ns: int) -> float:
-    return (perf_counter_ns() - started_ns) / 1_000_000
-
+_TESSDATA_PATTERN = re.compile(r'"([^"]+)"')
 
 type Runner = Callable[..., subprocess.CompletedProcess[bytes]]
 
@@ -60,6 +73,7 @@ class TesseractEngine:
         self._timeout_s = timeout_s
         self._run = runner
         self._version: str | None = None
+        self._language_data: dict[str, str] | None = None
 
     @property
     def engine_id(self) -> str:
@@ -71,16 +85,43 @@ class TesseractEngine:
             "version": self.version(),
             "languages": self._languages,
             "psm": str(self._psm),
+            **{f"data.{lang}": digest for lang, digest in self.language_data().items()},
         }
 
     def version(self) -> str:
         """Return the first line of ``tesseract --version``."""
         if self._version is None:
-            completed = self._invoke([self._executable, "--version"], None)
-            output = completed.stdout or completed.stderr
-            lines = output.decode("utf-8", "replace").splitlines()
-            self._version = lines[0].strip() if lines else ""
+            lines = self._lines([self._executable, "--version"], "version")
+            self._version = lines[0].strip()
         return self._version
+
+    def language_data(self) -> dict[str, str]:
+        """Return a short SHA-256 of each ``.traineddata`` file in use.
+
+        Engine version alone does not identify the model: swapping the fast
+        and best Japanese data changes accuracy without changing the version.
+        """
+        if self._language_data is None:
+            lines = self._lines([self._executable, "--list-langs"], "language list")
+            match = _TESSDATA_PATTERN.search(lines[0])
+            if match is None:
+                raise OcrEngineError("tesseract did not report its tessdata folder")
+            folder = Path(match.group(1))
+            data: dict[str, str] = {}
+            for lang in self._languages.split("+"):
+                path = folder / f"{lang}.traineddata"
+                if not path.is_file():
+                    raise OcrEngineError(f"tesseract language data {lang!r} is not installed")
+                data[lang] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+            self._language_data = data
+        return self._language_data
+
+    def _lines(self, command: list[str], what: str) -> list[str]:
+        completed = self._invoke(command, None)
+        lines = completed.stdout.decode("utf-8", "replace").splitlines()
+        if completed.returncode != 0 or not lines or not lines[0].strip():
+            raise OcrEngineError(f"tesseract {what} unavailable; see docs/windows-setup.md")
+        return lines
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
         started = perf_counter_ns()
@@ -98,7 +139,7 @@ class TesseractEngine:
             raise OcrEngineError(f"tesseract exited with code {completed.returncode}")
         return OcrResult(
             text=completed.stdout.decode("utf-8", "replace"),
-            duration_ms=_elapsed_ms(started),
+            duration_ms=elapsed_ms(started),
         )
 
     def _invoke(
@@ -148,13 +189,21 @@ class QwenVlTranscribeEngine:
         self._model = model
         self._prompt = prompt
         self._seed = seed
+        self._digest: str | None = None
 
     @property
     def engine_id(self) -> str:
         return "qwen-vl"
 
     def describe(self) -> dict[str, str]:
-        return {"name": "qwen-vl-transcribe", "model": self._model, "seed": str(self._seed)}
+        if self._digest is None:
+            self._digest = self._adapter.resolve_digest(self._model)
+        return {
+            "name": "qwen-vl-transcribe",
+            "model": self._model,
+            "digest": self._digest,
+            "seed": str(self._seed),
+        }
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
         started = perf_counter_ns()
@@ -173,7 +222,7 @@ class QwenVlTranscribeEngine:
         text = decoded.get("text") if isinstance(decoded, dict) else None
         if not isinstance(text, str) or set(decoded) != {"text"}:
             raise OcrEngineError("transcription did not match the expected shape")
-        return OcrResult(text=text, duration_ms=_elapsed_ms(started))
+        return OcrResult(text=text, duration_ms=elapsed_ms(started))
 
 
 MISTRAL_OCR_URL: Final[str] = "https://api.mistral.ai/v1/ocr"
@@ -263,17 +312,20 @@ class MistralOcrEngine:
             body = self._post(request, self._timeout_s)
         except urllib.error.HTTPError as error:
             raise OcrEngineError(f"Mistral OCR returned HTTP {error.code}") from None
-        except urllib.error.URLError, TimeoutError, OSError:
+        except OSError, http.client.HTTPException:
             raise OcrEngineError("Mistral OCR could not be reached") from None
         try:
             decoded = json.loads(body)
             pages = decoded["pages"]
             text = "\n".join(str(page["markdown"]) for page in pages)
         except ValueError, KeyError, TypeError:
-            raise OcrEngineError("Mistral OCR returned an unexpected response") from None
+            # A successful HTTP response was billed even though it is unusable.
+            raise OcrEngineError(
+                "Mistral OCR returned an unexpected response", cost_usd=self._usd_per_page
+            ) from None
         return OcrResult(
             text=text,
-            duration_ms=_elapsed_ms(started),
+            duration_ms=elapsed_ms(started),
             cost_usd=self._usd_per_page * max(1, len(pages)),
         )
 
@@ -282,13 +334,11 @@ def _paddle_lines(result: Any) -> list[str]:
     """Collect recognized lines from PaddleOCR 3.x or 2.x result shapes."""
     lines: list[str] = []
     for page in result or []:
-        texts = None
-        if isinstance(page, dict) or hasattr(page, "get"):
-            texts = page.get("rec_texts")
+        texts = page.get("rec_texts") if hasattr(page, "get") else None
         if texts is not None:
             lines.extend(str(text) for text in texts)
             continue
-        for entry in _as_iterable(page):
+        for entry in page if isinstance(page, (list, tuple)) else ():
             if isinstance(entry, (list, tuple)) and len(entry) == 2:
                 recognized = entry[1]
                 if isinstance(recognized, (list, tuple)) and recognized:
@@ -296,50 +346,72 @@ def _paddle_lines(result: Any) -> list[str]:
     return lines
 
 
-def _as_iterable(value: Any) -> Iterable[Any]:
-    return value if isinstance(value, (list, tuple)) else []
+def _installed_version(package: str) -> str:
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return "not installed"
 
 
 class PaddleOcrEngine:
     """Candidate A2: PaddleOCR, imported only when first used.
 
     PaddleOCR is not a declared dependency: install it on the benchmark
-    machine as described in ``docs/windows-setup.md``.
+    machine as described in ``docs/windows-setup.md``. Sheets are passed in
+    memory as BGR arrays (PaddleOCR's OpenCV convention), never written to disk.
     """
 
-    def __init__(self, *, lang: str = "japan") -> None:
+    def __init__(self, *, lang: str = "japan", ocr_version: str | None = None) -> None:
         self._lang = lang
+        self._ocr_version = ocr_version
         self._reader: Any = None
-        self._version = ""
+        self._numpy: Any = None
+        self._load_error: str | None = None
 
     @property
     def engine_id(self) -> str:
         return "paddleocr"
 
     def describe(self) -> dict[str, str]:
-        return {"name": "paddleocr", "version": self._version, "lang": self._lang}
+        return {
+            "name": "paddleocr",
+            "version": _installed_version("paddleocr"),
+            "paddlepaddle": _installed_version("paddlepaddle"),
+            "lang": self._lang,
+            "ocr_version": self._ocr_version or "default",
+        }
 
     def _load(self) -> Any:
+        if self._load_error is not None:
+            raise OcrEngineError(self._load_error)
         if self._reader is None:
             try:
-                import paddleocr  # type: ignore[import-not-found]
+                paddleocr = importlib.import_module("paddleocr")
+                self._numpy = importlib.import_module("numpy")
             except ImportError:
-                raise OcrEngineError(
-                    "PaddleOCR is not installed; see docs/windows-setup.md"
-                ) from None
-            self._version = str(getattr(paddleocr, "__version__", ""))
-            self._reader = paddleocr.PaddleOCR(lang=self._lang)
+                self._load_error = "PaddleOCR is not installed; see docs/windows-setup.md"
+                raise OcrEngineError(self._load_error) from None
+            options = {"lang": self._lang}
+            if self._ocr_version is not None:
+                options["ocr_version"] = self._ocr_version
+            try:
+                self._reader = paddleocr.PaddleOCR(**options)
+            except Exception:
+                self._load_error = (
+                    "PaddleOCR could not start (models or GPU runtime); see docs/windows-setup.md"
+                )
+                raise OcrEngineError(self._load_error) from None
         return self._reader
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
         reader = self._load()
         started = perf_counter_ns()
-        with tempfile.TemporaryDirectory(prefix="ocrbench-") as directory:
-            sheet = Path(directory) / "sheet.png"
-            sheet.write_bytes(image.png_bytes)
-            try:
-                run = reader.predict if hasattr(reader, "predict") else reader.ocr
-                result = run(str(sheet))
-            except Exception:
-                raise OcrEngineError("PaddleOCR failed on this sheet") from None
-        return OcrResult(text="\n".join(_paddle_lines(result)), duration_ms=_elapsed_ms(started))
+        with Image.open(io.BytesIO(image.png_bytes)) as decoded:
+            red, green, blue = decoded.convert("RGB").split()
+            bgr = self._numpy.asarray(Image.merge("RGB", (blue, green, red)))
+        try:
+            run = reader.predict if hasattr(reader, "predict") else reader.ocr
+            result = run(bgr)
+        except Exception:
+            raise OcrEngineError("PaddleOCR failed on this sheet") from None
+        return OcrResult(text="\n".join(_paddle_lines(result)), duration_ms=elapsed_ms(started))
