@@ -6,7 +6,7 @@
 | ADR | ADR-0002 §4, §5, §7 |
 | Depends on | T20 |
 | Followed by | T24 |
-| Main outputs | additions to `scoring.py` / `metrics.py`, tests |
+| Main outputs | `src/ocrbench/field_metrics.py` (reuses the statistics in `metrics.py`), tests |
 
 ## Goal
 
