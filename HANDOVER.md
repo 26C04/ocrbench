@@ -86,9 +86,22 @@ What to build, in order:
    values exactly as printed (order number with its year ending, quantity as
    printed, e.g. `1 PC`). Validate every row with `ground_truth_problems()`.
    Final-split answers must be checked by a second person.
+
+   **Done.** Put the sheets in `<root>/raw/`, then run:
+
+   ```powershell
+   uv run ocrbench dataset import-answers --root D:\ocrbench-data --answers D:\answers.csv
+   uv run ocrbench dataset validate --root D:\ocrbench-data --ground-truth edi_fields --min-per-split 10 --strict-counts
+   uv run ocrbench dataset fingerprint --root D:\ocrbench-data --ground-truth edi_fields
+   ```
+
+   Nothing is renamed or written unless every row is valid. Errors name the
+   row and column but never print the values. Keep `answers.csv` outside the
+   repo, next to the data.
 2. **Dataset:** reuse `dataset.build_manifest` (anonymous file names, SHA-256,
    fingerprint). Replace the fixed 40/20/40 strict count check with a minimum
-   per split for `dev` and `final`.
+   per split for `dev` and `final`. **Done** (`--min-per-split`; a split with
+   no scans or no photos is a warning only).
 3. **Runner:** run any `Pipeline` over a split, score with `score_sheet`,
    write `results.json` and the run manifest (pipeline `describe()` output,
    versions, digests, dataset fingerprint).
