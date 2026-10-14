@@ -222,13 +222,32 @@ Human tasks for ADR-0002:
 
 ## 運用タスク（Codex 対象外・人間が実施）
 
-| ID | タスク | ADR 参照 | 前提 | 内容 |
-|---|---|---|---|---|
-| H1 | Windows 実機セットアップと smoke test | §6, Impl. Order 2 | T18 | `docs/windows-setup.md` に従い uv / Ollama / モデル 5 種を導入し、`ocrbench smoke` で 1 モデル・1 帳票を確認。Ollama バージョンと各モデル digest を記録 |
-| H2 | データ収集・正解作成・分割確定 | §4, Impl. Order 3 | T11, T17 | 異なる原本 100 件（スキャン 50 / 写真 50）を `OCRBENCH_DATA_DIR` / `OCRBENCH_FINAL_DIR` へ配置。GT JSON を作成し、Final test 分は作成者と別の人が原本照合。`ocrbench dataset build-manifest` → `validate --strict-counts` → `fingerprint` で固定 |
-| H3 | Final test の OS レベル隔離 | §5 | T16 | `docs/isolation-windows.md` に従い、別 Windows ユーザーと NTFS ACL で `OCRBENCH_FINAL_DIR` を隔離。チェックリストで検証 |
-| H4 | 5 モデル一次評価と上位 2 モデル選定、プロンプト自動改善ループ | §8-1〜5, Impl. Order 4–5 | H1, H2 | 共通初期プロンプトで Development 40 件 × 5 モデルを `ocrbench run`。精度と 30 秒制約で上位 2 モデルを選び、エージェントに CLI（`export-summary` / `prompt add` / `select`）だけを使わせて最大 10 候補を改善。Selection 20 件は一括実行し `pick-best` で盲検選定 |
-| H5 | Final test 実行と研究発表レポート | §8-6, §9, §10, Impl. Order 6–7 | H3, H4 | 隔離環境で Final 40 件 × 3 回実行（第 1 回が主精度）。`ocrbench report` / `compare-runs` で集計し、`analysis.md` の考察と合わせて研究発表資料を作成 |
+### 担当と役割
+
+| メンバー | 役割 | 担当範囲 |
+|---|---|---|
+| リーダー | 進捗・スケジュール管理 | 全体進行、H2 の GT 作成分担、Fuke ↔ Roma 間の受け渡し確認 |
+| Fuke | システム改善 | コード修正、H4 のモデル選定・プロンプト改善ループ。**Development / Selection データのみ扱い、Final test には触れない** |
+| Roma | 実機検証・Final test 管理 | H1 の手順書再現確認、H2 の Final GT 独立照合、H3 の隔離環境管理、H4 の実機実行・計測、H5 の Final 実行 |
+| Anu-Ujin | 発表資料作成 | H5 の研究発表資料。背景・手法・評価設計（ADR §4, §8, §9）は H4 を待たずに先行着手 |
+
+分担の根拠:
+
+- Final test の正解 JSON は作成者とは別の人が原本照合する（ADR §4）。照合は Roma が担当する。
+- プロンプト改善を行う Fuke が Final test に触れると評価汚染になる（ADR §5）。
+  Final 用 Windows ユーザーの管理と Final 実行は Roma だけが行う。
+- 手順書の不備は実装者以外が手順どおりに再現して初めて見つかる。H1 は Roma が
+  `docs/windows-setup.md` だけを見て実施し、詰まった箇所を Fuke が修正する。
+
+### タスク一覧
+
+| ID | タスク | 担当 | ADR 参照 | 前提 | 内容 |
+|---|---|---|---|---|---|
+| H1 | Windows 実機セットアップと smoke test | Roma（手順書修正: Fuke） | §6, Impl. Order 2 | T18 | `docs/windows-setup.md` に従い uv / Ollama / モデル 5 種を導入し、`ocrbench smoke` で 1 モデル・1 帳票を確認。Ollama バージョンと各モデル digest を記録 |
+| H2 | データ収集・正解作成・分割確定 | 全員（GT 作成）/ Roma（Final 照合） | §4, Impl. Order 3 | T11, T17 | 異なる原本 100 件（スキャン 50 / 写真 50）を `OCRBENCH_DATA_DIR` / `OCRBENCH_FINAL_DIR` へ配置。GT JSON を作成し、Final test 分は作成者と別の人が原本照合。`ocrbench dataset build-manifest` → `validate --strict-counts` → `fingerprint` で固定 |
+| H3 | Final test の OS レベル隔離 | Roma | §5 | T16 | `docs/isolation-windows.md` に従い、別 Windows ユーザーと NTFS ACL で `OCRBENCH_FINAL_DIR` を隔離。チェックリストで検証 |
+| H4 | 5 モデル一次評価と上位 2 モデル選定、プロンプト自動改善ループ | Fuke（改善）/ Roma（実行・計測） | §8-1〜5, Impl. Order 4–5 | H1, H2 | 共通初期プロンプトで Development 40 件 × 5 モデルを `ocrbench run`。精度と 30 秒制約で上位 2 モデルを選び、エージェントに CLI（`export-summary` / `prompt add` / `select`）だけを使わせて最大 10 候補を改善。Selection 20 件は一括実行し `pick-best` で盲検選定 |
+| H5 | Final test 実行と研究発表レポート | Roma（Final 実行）/ Anu-Ujin（資料） | §8-6, §9, §10, Impl. Order 6–7 | H3, H4 | 隔離環境で Final 40 件 × 3 回実行（第 1 回が主精度）。`ocrbench report` / `compare-runs` で集計し、`analysis.md` の考察と合わせて研究発表資料を作成 |
 
 ## 進捗管理
 
