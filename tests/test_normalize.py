@@ -87,6 +87,9 @@ def test_normalize_delivery_date(value: str, expected: str | None) -> None:
         ("10個入", 10),
         ("10PCS", 10),
         ("10pc", 10),
+        ("1 PC", 1),
+        ("1PC", 1),
+        ("4PC", 4),
         ("\uff11\uff0c\uff10\uff10\uff10 本", 1000),
         ("9" * 5000, None),
     ],
@@ -96,7 +99,7 @@ def test_normalize_num_pieces(value: int | str, expected: int | None) -> None:
 
 
 def test_unit_suffixes_are_public_and_longest_overlapping_unit_comes_first() -> None:
-    assert set(UNIT_SUFFIXES) == {"個", "枚", "本", "pcs", "PCS", "pc", "個入"}
+    assert set(UNIT_SUFFIXES) == {"個", "枚", "本", "pcs", "PCS", "pc", "PC", "個入"}
     assert UNIT_SUFFIXES.index("個入") < UNIT_SUFFIXES.index("個")
 
 

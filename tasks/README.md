@@ -181,6 +181,45 @@ graph TD
 並行開発の目安: T02・T03 は T01 直後から並行可。T05・T06、および T09・T10・T11・T13 はそれぞれ並行可。
 T12 が最大の合流点。
 
+## Phase 4: ADR-0002 two-layer redesign (T19–T25)
+
+[ADR-0002](../adr/0002-two-layer-edi-field-benchmark.md) (Proposed) revises ADR-0001 for
+Prof. Sato's two-layer design (OCR → local LLM) and the 4 EDI fields. For T19 onward,
+include ADR-0002 alongside ADR-0001 in the context; where they disagree, ADR-0002 wins.
+These tasks add to the existing code. Existing features (Selection split, prompt loop)
+stay and their tests keep passing.
+
+| ID | Task | Depends on | ADR-0002 |
+|---|---|---|---|
+| [T19](T19-adr-0002-docs.md) | ADR-0002 and project documentation | T18 | all |
+| [T20](T20-edi-field-schema.md) | EDI field schema and normalization | T19 | §2 |
+| [T21](T21-pipeline-interface.md) | Pipeline interface and adapters | T20 | §1 |
+| [T22](T22-ocr-engines.md) | Layer 1 OCR engines (Tesseract, PaddleOCR, Qwen-VL, Mistral) | T21 | §1, §6, §8 |
+| [T23](T23-field-metrics.md) | Field metrics and layer attribution | T20 | §4, §5, §7 |
+| [T24](T24-runner-cli-reports.md) | Runner, CLI, and reports for pipelines | T21, T22, T23 | §1, §3, §4 |
+| [T25](T25-synthetic-dry-run.md) | Synthetic dry run | T24 | §1, §3 |
+
+```mermaid
+graph TD
+  T18[T18 smoke/docs] --> T19[T19 ADR-0002]
+  T19 --> T20[T20 EDI fields]
+  T20 --> T21[T21 pipelines]
+  T20 --> T23[T23 field metrics]
+  T21 --> T22[T22 OCR engines]
+  T21 --> T24[T24 runner/CLI]
+  T22 --> T24
+  T23 --> T24
+  T24 --> T25[T25 synthetic dry run]
+```
+
+Human tasks for ADR-0002:
+
+| ID | Task | Needs | Content |
+|---|---|---|---|
+| H6 | Real-data benchmark | T25, Kimura's 30–50 sheets | Build the manifest, write ground truth (final split checked by a second person), tune on dev only, tag the code, run the final split once per candidate, write the report |
+| H7 | Mistral OCR run | H6, Kimura's written cloud approval | Record the approval in `docs/`, run A4 on the same frozen final split, apply the ADR-0002 §7 decision rule |
+| H8 | Settle open decision D1 | EDI credentials | Check whether the hWAO 手配番号 search needs the `-2025` suffix; update ADR-0002 and T20 |
+
 ## 運用タスク（Codex 対象外・人間が実施）
 
 ### 担当と役割
@@ -217,4 +256,7 @@ PR がマージされたらチェックする。
 - [x] T01 / - [x] T02 / - [x] T03 / - [x] T04 / - [x] T05 / - [x] T06
 - [x] T07 / - [x] T08 / - [x] T09 / - [x] T10 / - [x] T11 / - [x] T12
 - [x] T13 / - [x] T14 / - [x] T15 / - [x] T16 / - [x] T17 / - [x] T18
-- [ ] H1 / - [ ] H2 / - [ ] H3 / - [ ] H4 / - [ ] H5
+- [ ] T19 / - [ ] T20 / - [ ] T21 / - [ ] T22 / - [ ] T23 / - [ ] T24 / - [ ] T25
+- [ ] H1 / - [ ] H2 / - [ ] H3 / - [ ] H4 / - [ ] H5 / - [ ] H6 / - [ ] H7 / - [ ] H8
+
+T01–T18 の状態はタグ `v0.1-vlm-benchmark` に保存されている。

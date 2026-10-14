@@ -299,3 +299,40 @@ def test_create_adapter_explicit_real_uses_fixed_host(monkeypatch: pytest.Monkey
 
     assert isinstance(create_adapter("real"), RealOllamaAdapter)
     cast(MagicMock, ollama.Client).assert_called_once_with(host=OLLAMA_HOST)
+
+
+def test_real_adapter_text_call_sends_no_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _mock_real_client(monkeypatch)
+    client.chat.return_value = ollama.ChatResponse(
+        message=ollama.Message(role="assistant", content="{}"),
+    )
+    schema = {"type": "object"}
+
+    result = RealOllamaAdapter().generate_structured_text(
+        model="qwen3:8b", prompt="read this text", format_schema=schema, seed=config.SEED
+    )
+
+    client.chat.assert_called_once_with(
+        model="qwen3:8b",
+        messages=[{"role": "user", "content": "read this text"}],
+        format=schema,
+        options={"temperature": 0.0, "seed": config.SEED},
+        think=False,
+        stream=False,
+        keep_alive=OLLAMA_KEEP_ALIVE,
+    )
+    assert result.content == "{}"
+
+
+def test_fake_text_call_shares_the_script_and_records_no_image() -> None:
+    adapter = FakeOllamaAdapter(["first", "second"])
+
+    text = adapter.generate_structured_text(
+        model="qwen3:8b", prompt="p", format_schema={}, seed=config.SEED
+    )
+    image = adapter.generate_structured(
+        model="qwen3:8b", prompt="p", image_png=b"abc", format_schema={}, seed=config.SEED
+    )
+
+    assert (text.content, image.content) == ("first", "second")
+    assert [call.image_size for call in adapter.calls] == [0, 3]

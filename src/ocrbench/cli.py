@@ -23,7 +23,9 @@ from ocrbench.dataset import (
     dataset_fingerprint,
     load_manifest,
     validate_split_counts,
+    validate_split_minimums,
 )
+from ocrbench.edi_answers import import_answers
 from ocrbench.metrics import aggregate, paired_comparison, reproducibility
 from ocrbench.ollama_adapter import ModelNotFoundError, create_adapter
 from ocrbench.prompts import (
@@ -140,6 +142,17 @@ def _leaf(
     )
 
 
+def _positive_int(value: str) -> int:
+    """Parse a whole number of at least 1."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a whole number") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def _run_id(value: str) -> str:
     """Validate a run ID during parsing, before any handler side effect."""
     if _RUN_ID_PATTERN.fullmatch(value) is None:
@@ -177,6 +190,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset_build.set_defaults(handler=_handle_dataset_build_manifest)
 
+    dataset_import = _leaf(
+        dataset_commands,
+        "import-answers",
+        shared=shared,
+        help_text="build an anonymous manifest and EDI ground truth from an answers CSV",
+    )
+    dataset_import.add_argument("--root", type=Path, required=True, help="dataset root directory")
+    dataset_import.add_argument(
+        "--answers",
+        type=Path,
+        required=True,
+        help="CSV: file,source_kind,split,customer,part_no,order_no,quantity",
+    )
+    dataset_import.set_defaults(handler=_handle_dataset_import_answers)
+
     dataset_validate = _leaf(
         dataset_commands,
         "validate",
@@ -189,6 +217,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reject counts that differ from the ADR split table",
     )
+    _add_ground_truth_option(dataset_validate)
+    dataset_validate.add_argument(
+        "--min-per-split",
+        type=_positive_int,
+        default=None,
+        help="ADR-0002: require at least N dev and N final documents instead of the 40/20/40 table",
+    )
     dataset_validate.set_defaults(handler=_handle_dataset_validate)
 
     fingerprint = _leaf(
@@ -198,6 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="calculate the complete dataset fingerprint",
     )
     fingerprint.add_argument("--root", type=Path, required=True, help="dataset root directory")
+    _add_ground_truth_option(fingerprint)
     fingerprint.set_defaults(handler=_handle_dataset_fingerprint)
 
     prompt = commands.add_parser(
@@ -413,9 +449,36 @@ def _handle_dataset_build_manifest(arguments: argparse.Namespace) -> None:
     _emit(arguments, payload, f"Built manifest for {len(manifest.docs)} documents.")
 
 
+def _add_ground_truth_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ground-truth",
+        choices=("order_document", "edi_fields"),
+        default="order_document",
+        help="ground-truth format: ADR-0001 order_document (default) or ADR-0002 edi_fields",
+    )
+
+
+def _handle_dataset_import_answers(arguments: argparse.Namespace) -> None:
+    manifest = import_answers(arguments.root, arguments.answers)
+    payload = {
+        "manifest": str(arguments.root / "manifest.json"),
+        "n_docs": len(manifest.docs),
+    }
+    _emit(
+        arguments,
+        payload,
+        f"Imported answers and built manifest for {len(manifest.docs)} documents.",
+    )
+
+
 def _handle_dataset_validate(arguments: argparse.Namespace) -> None:
-    manifest = load_manifest(arguments.root)
-    violations = validate_split_counts(manifest, strict=arguments.strict_counts)
+    manifest = load_manifest(arguments.root, ground_truth=arguments.ground_truth)
+    if arguments.min_per_split is None:
+        violations = validate_split_counts(manifest, strict=arguments.strict_counts)
+    else:
+        violations = validate_split_minimums(
+            manifest, minimum=arguments.min_per_split, strict=arguments.strict_counts
+        )
     payload = {
         "n_docs": len(manifest.docs),
         "split_count_warnings": violations,
@@ -430,7 +493,7 @@ def _handle_dataset_validate(arguments: argparse.Namespace) -> None:
 
 
 def _handle_dataset_fingerprint(arguments: argparse.Namespace) -> None:
-    manifest = load_manifest(arguments.root)
+    manifest = load_manifest(arguments.root, ground_truth=arguments.ground_truth)
     fingerprint = dataset_fingerprint(arguments.root, manifest)
     _emit(arguments, {"fingerprint": fingerprint}, fingerprint)
 

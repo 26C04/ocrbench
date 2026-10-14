@@ -171,6 +171,42 @@ GPU placement, and date. Then proceed only to the next approved task in
 runbook linked in section 5; the CLI confirmation flag is not a security
 boundary.
 
+## 11. Install the Layer 1 OCR engines (ADR-0002)
+
+None of these is a Python dependency of `ocrbench`; install only the ones you
+benchmark, and record each version.
+
+**Tesseract (candidate A1).** Install the UB Mannheim Windows build of
+Tesseract 5, and tick **Japanese** under additional language data during setup.
+Add its folder (usually `C:\Program Files\Tesseract-OCR`) to `PATH`, then check:
+
+```powershell
+tesseract --version
+tesseract --list-langs   # must list jpn and eng
+uv run pytest -m ocr_engines --no-cov
+```
+
+**PaddleOCR (candidate A2).** Install it into the project environment with
+`uv pip install paddlepaddle paddleocr`, following PaddleOCR's own instructions
+for the GPU or CPU build. Check first that it supports the project's Python
+version; if it does not, record that A2 could not be run and why. It downloads
+its Japanese models on first use.
+
+**Qwen-VL transcription (candidate A3).** Pull the vision model with Ollama
+(`ollama pull qwen2.5vl:7b`) and record its digest as in section 4.
+
+**Mistral OCR (candidate A4).** Do nothing until Kimura's written approval to
+send sheet images to Mistral is recorded in `docs/`. Then set the API key only in
+the current terminal, never in a file in the repository:
+
+```powershell
+$env:OCRBENCH_ALLOW_CLOUD = "1"
+$env:MISTRAL_API_KEY = "<key from the Mistral console>"
+```
+
+Each run must also pass `--confirm-cloud`. Without all three, the engine refuses
+to start.
+
 Official references: [uv installation](https://docs.astral.sh/uv/getting-started/installation/),
 [Ollama on Windows](https://docs.ollama.com/windows), and
 [Ollama FAQ](https://docs.ollama.com/faq).

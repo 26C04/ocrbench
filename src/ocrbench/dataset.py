@@ -23,7 +23,7 @@ import stat
 import tempfile
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal, Self, cast
@@ -31,10 +31,13 @@ from typing import Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from ocrbench.config import OcrBenchError
+from ocrbench.edi_fields import EdiFields, ground_truth_problems
 from ocrbench.schema import OrderDocument
 
 SourceKind = Literal["scan", "photo"]
 Split = Literal["dev", "selection", "final"]
+GroundTruthKind = Literal["order_document", "edi_fields"]
+"""``order_document`` is the ADR-0001 full record; ``edi_fields`` the ADR-0002 4 fields."""
 
 _ALLOWED_EXTENSIONS = frozenset({".pdf", ".jpg", ".jpeg", ".png"})
 _DOC_ID_PATTERN = re.compile(r"^doc-[0-9a-f]{12}$")
@@ -381,10 +384,17 @@ def _parse_manifest_structure(document: object) -> tuple[list[str], list[_Manife
     return violations, probes
 
 
-def _load_gt_violation(path: Path, display_path: str) -> str | None:
+def _load_gt_violation(
+    path: Path, display_path: str, ground_truth: GroundTruthKind = "order_document"
+) -> str | None:
     try:
         document = _read_json(path)
-        OrderDocument.model_validate(document)
+        if ground_truth == "edi_fields":
+            problems = ground_truth_problems(EdiFields.model_validate(document))
+            if problems:
+                return f"{display_path} cannot be scored: {'; '.join(problems)}"
+        else:
+            OrderDocument.model_validate(document)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
         if isinstance(error, ValidationError):
             details = "; ".join(_validation_messages(error))
@@ -394,12 +404,13 @@ def _load_gt_violation(path: Path, display_path: str) -> str | None:
     return None
 
 
-def load_manifest(root: Path) -> Manifest:
+def load_manifest(root: Path, *, ground_truth: GroundTruthKind = "order_document") -> Manifest:
     """Load and comprehensively validate ``manifest.json``.
 
     Once the JSON object and ``docs`` array are readable, independent structural,
     duplicate-ID, raw-file, hash, and ground-truth violations are accumulated in
-    a deterministic order before :class:`DatasetError` is raised.
+    a deterministic order before :class:`DatasetError` is raised. Each
+    ``gt/<doc-id>.json`` is validated as the selected ``ground_truth`` kind.
     """
     anchor, root_error = _root_anchor(root)
     if root_error is not None or anchor is None:
@@ -473,7 +484,7 @@ def load_manifest(root: Path) -> Manifest:
                     (probe.label, f"{probe.label}: {gt_error or 'ground truth is unavailable'}")
                 )
             else:
-                invalid_gt = _load_gt_violation(gt_path, f"gt/{gt_name}")
+                invalid_gt = _load_gt_violation(gt_path, f"gt/{gt_name}", ground_truth)
                 if invalid_gt is not None:
                     gt_violations.append((probe.label, f"{probe.label}: {invalid_gt}"))
 
@@ -587,6 +598,38 @@ def dataset_fingerprint(root: Path, manifest: Manifest) -> str:
         _framed_update(digest, f"raw:{doc_id}", raw_digest)
         _framed_update(digest, f"gt:{doc_id}", gt_digest)
     return digest.hexdigest()
+
+
+def validate_split_minimums(manifest: Manifest, *, minimum: int, strict: bool) -> list[str]:
+    """Check the ADR-0002 two-split layout: ``dev`` and ``final`` only.
+
+    Each split needs at least ``minimum`` documents, and ``selection`` must be
+    empty. A split without scans or without photos is a warning only, because
+    ADR-0002 asks for both kinds "when the data allows". ``strict`` raises on
+    the count and ``selection`` violations, never on the warnings.
+    """
+    if minimum < 1:
+        raise ValueError("minimum must be at least 1")
+    counts = Counter((entry.split, entry.source_kind) for entry in manifest.docs)
+    violations: list[str] = []
+    warnings: list[str] = []
+    n_selection = counts[("selection", "scan")] + counts[("selection", "photo")]
+    if n_selection:
+        violations.append(f"split 'selection' is not used by ADR-0002, found {n_selection}")
+    for split in ("dev", "final"):
+        actual_scan = counts[(split, "scan")]
+        actual_photo = counts[(split, "photo")]
+        if actual_scan + actual_photo < minimum:
+            violations.append(
+                f"split {split!r}: expected at least {minimum} documents, "
+                f"found {actual_scan + actual_photo}"
+            )
+        for source_kind, actual in (("scan", actual_scan), ("photo", actual_photo)):
+            if actual == 0:
+                warnings.append(f"split {split!r} has no {source_kind!r} documents")
+    if strict and violations:
+        raise DatasetError(violations)
+    return [*violations, *warnings]
 
 
 def _read_assignments_csv(assignments_csv: Path) -> tuple[list[_BuildRecord], list[str]]:
@@ -1012,7 +1055,85 @@ def _write_manifest_temp(root: Path, payload: bytes) -> Path:
     return temp_path
 
 
-def build_manifest(root: Path, assignments_csv: Path) -> Manifest:
+def _write_ground_truth(
+    root: Path,
+    anchor: Path,
+    records: list[_BuildRecord],
+    ground_truth_by_row: Mapping[int, bytes],
+) -> list[Path]:
+    """Create ``gt/<doc-id>.json`` for each record without replacing other content.
+
+    An existing file with identical bytes is kept as is. Returns the files this
+    call created so a later failure can remove them.
+    """
+    violations: list[str] = []
+    planned: list[tuple[Path, bytes]] = []
+    gt_dir = root / "gt"
+    try:
+        if _is_link_or_reparse(gt_dir):
+            raise DatasetError("gt/ must not be a symlink or reparse alias")
+        gt_dir.mkdir(exist_ok=True)
+    except OSError as error:
+        raise DatasetError(f"cannot prepare gt/ directory: {error}") from error
+    for record in records:
+        payload = ground_truth_by_row.get(record.row_number)
+        if payload is None:
+            violations.append(f"CSV row {record.row_number}: no ground truth was supplied")
+            continue
+        assert record.doc_id is not None
+        name = f"{record.doc_id}.json"
+        path, path_error = _resolve_member(root, anchor, "gt", name)
+        if path_error is not None or path is None:
+            violations.append(f"CSV row {record.row_number}: {path_error or 'bad gt path'}")
+            continue
+        try:
+            if _is_link_or_reparse(gt_dir / name):
+                violations.append(f"CSV row {record.row_number}: gt/{name} is an alias")
+                continue
+            if path.exists():
+                with path.open("rb") as stream:
+                    existing = stream.read()
+                if existing != payload:
+                    violations.append(
+                        f"CSV row {record.row_number}: gt/{name} already exists "
+                        "with different content"
+                    )
+                continue
+        except OSError as error:
+            violations.append(f"CSV row {record.row_number}: cannot inspect gt/{name}: {error}")
+            continue
+        planned.append((path, payload))
+    if violations:
+        raise DatasetError(violations)
+
+    created: list[Path] = []
+    try:
+        for path, payload in planned:
+            with path.open("xb") as stream:
+                created.append(path)
+                stream.write(payload)
+    except OSError as error:
+        failures = _remove_files(created)
+        raise DatasetError([f"cannot write ground truth: {error}", *failures]) from error
+    return created
+
+
+def _remove_files(paths: list[Path]) -> list[str]:
+    failures: list[str] = []
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            failures.append(f"could not remove gt/{path.name}: {error}")
+    return failures
+
+
+def build_manifest(
+    root: Path,
+    assignments_csv: Path,
+    *,
+    ground_truth_by_row: Mapping[int, bytes] | None = None,
+) -> Manifest:
     """Build an anonymous manifest after complete validation and safe moves.
 
     Every source is re-resolved and rehashed after preflight and before the first
@@ -1020,6 +1141,9 @@ def build_manifest(root: Path, assignments_csv: Path) -> Manifest:
     replaces an existing path on Windows or POSIX. Anonymous targets are checked
     again before the manifest is atomically published. Ordinary I/O or integrity
     failures trigger a best-effort rollback to the original source names.
+
+    ``ground_truth_by_row`` maps CSV row numbers to ``gt/<doc-id>.json`` bytes.
+    Those files are created before the first rename and removed on rollback.
     """
     records, violations, anchor = _preflight_build(root, assignments_csv)
     if violations:
@@ -1060,10 +1184,15 @@ def build_manifest(root: Path, assignments_csv: Path) -> Manifest:
         + "\n"
     ).encode("utf-8")
 
+    created_gt: list[Path] = []
+    if ground_truth_by_row is not None:
+        created_gt = _write_ground_truth(root, anchor, records, ground_truth_by_row)
+
     try:
         temp_manifest = _write_manifest_temp(root, payload)
     except OSError as error:
-        raise DatasetError(f"cannot prepare atomic manifest write: {error}") from error
+        failures = _remove_files(created_gt)
+        raise DatasetError([f"cannot prepare atomic manifest write: {error}", *failures]) from error
 
     states: list[_RenameState] = []
     try:
@@ -1100,6 +1229,7 @@ def build_manifest(root: Path, assignments_csv: Path) -> Manifest:
         os.replace(temp_manifest, root / "manifest.json")
     except (OSError, _MutationIntegrityError) as error:
         rollback_failures = _rollback_renames(states)
+        rollback_failures.extend(_remove_files(created_gt))
         try:
             temp_manifest.unlink(missing_ok=True)
         except OSError as cleanup_error:
