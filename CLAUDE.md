@@ -84,18 +84,21 @@ Steps the script automates:
 ## Key constraints
 
 - **Never commit** to the shared repo: EDI credentials, instruction sheet images (possible cloud approval pending from Kimura), personal API keys
+- **Claude must never open, read, or display** real sheet images, ground-truth files, model outputs, or run results (anything under `OCRBENCH_DATA_DIR`, `OCRBENCH_FINAL_DIR`, `OCRBENCH_RUNS_DIR`), and must never handle EDI credentials. Write and run code against them; report only anonymous totals
 - Mistral OCR requires Kimura's approval before sending sheet images to the cloud
 - Layer 2 (LLM) must always run locally regardless of Layer 1 choice
 - Score on exact matches only — one wrong digit = wrong EDI entry
 
 ---
 
-## Current status (as of Oct 2026)
+## Current status (as of 14 Oct 2026)
 
-- Benchmark prototype built and running on synthetic test data
-- Waiting on Kimura: real instruction sheets (30–50 samples) and cloud approval
-- EDI credentials requested but not yet received
+- Steps 0–4 of ADR-0002 done in PR #23 (CI green); next is Step 5 (runner, CLI, reports, ground truth from CSV)
+- **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
+- **A test EDI website is available** to log in and enter values; use it to settle ADR-0002 D1 ("-2025" ending)
+- Still waiting on Kimura: cloud approval for Mistral OCR
 - Phase 2 (SAM3) starting
+- Full status and next steps: [HANDOVER.md](HANDOVER.md)
 
 ---
 
