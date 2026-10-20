@@ -330,3 +330,59 @@ def test_answers_from_pdf_builds_an_importable_answer_key(
         }
         with pytest.raises(PdfSplitError, match=message):
             answers_from_pdf(**options)  # type: ignore[arg-type]
+
+
+def test_extract_prints_the_edi_handover_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ocrbench.handover import handover_record
+    from ocrbench.pipelines import PipelineResult
+
+    config = tmp_path / "a0r.json"
+    config.write_text(
+        json.dumps({"kind": "ocr_rules", "pipeline_id": "A0R", "ocr": {"engine": "pdf_text"}}),
+        encoding="utf-8",
+    )
+    sheet = tmp_path / "sheet.pdf"
+    sheet.write_bytes(make_text_pdf_bytes([_sheet_lines("HR900000001", "900001-2026", "4PC")]))
+
+    assert main(["extract", "--pipeline", str(config), "--image", str(sheet)]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["ready"] is True and record["review_reasons"] == []
+    assert record["fields"]["part_no"] == "HR900000001"
+    assert record["edi"] == {
+        "site": "hwao_nmtj",
+        "order_no_printed": "900001-2026",
+        "order_no_without_year": "900001",
+        "quantity": 4,
+    }
+    assert record["rules"]["order_no_rule"] == "keep"
+
+    partial = tmp_path / "partial.pdf"
+    partial.write_bytes(make_text_pdf_bytes([["受注先 Unknown Corp", "部番 HR900000001"]]))
+    assert main(["extract", "--pipeline", str(config), "--image", str(partial), "--json"]) == 3
+    record = json.loads(capsys.readouterr().out)
+    assert record["ready"] is False
+    assert record["review_reasons"] == [
+        "pipeline status is needs_review",
+        "order_no was not read",
+        "quantity was not read",
+        "customer does not match any known EDI site",
+    ]
+
+    image = tmp_path / "photo.png"
+    from PIL import Image
+
+    Image.new("RGB", (8, 8), "white").save(image)
+    assert main(["extract", "--pipeline", str(config), "--image", str(image)]) == 3
+    record = json.loads(capsys.readouterr().out)
+    assert "layer 1 failed: OcrEngineError" in record["review_reasons"]
+    assert record["fields"] == dict.fromkeys(("customer", "part_no", "order_no", "quantity"))
+
+    assert main(["extract", "--pipeline", str(config), "--image", str(tmp_path / "x.gif")]) == 2
+    assert "cannot read the sheet" in capsys.readouterr().err
+
+    errored = PipelineResult(
+        PipelineStatus.ERROR, None, None, None, None, 1.0, 0.0, 0, error="boom"
+    )
+    assert handover_record(errored, pipeline_id="X")["edi"]["order_no_without_year"] is None

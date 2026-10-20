@@ -28,6 +28,7 @@ from ocrbench.dataset import (
 )
 from ocrbench.edi_answers import import_answers
 from ocrbench.field_metrics import compare, decide_cloud, summarize
+from ocrbench.handover import handover_record
 from ocrbench.leaderboard import (
     LeaderboardError,
     build_leaderboard,
@@ -57,6 +58,7 @@ from ocrbench.pipeline_reporting import (
 )
 from ocrbench.pipeline_results import is_pipeline_run, load_pipeline_run
 from ocrbench.pipeline_runner import run_pipeline
+from ocrbench.preprocess import PreprocessError, preprocess
 from ocrbench.prompts import (
     PromptRegistryError,
     PromptVersion,
@@ -525,6 +527,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare.set_defaults(handler=_handle_compare_runs)
 
+    extract = _leaf(
+        commands,
+        "extract",
+        shared=shared,
+        help_text="read one sheet with a pipeline and print the record for the EDI script",
+    )
+    extract.add_argument("--pipeline", type=Path, required=True, help="pipeline config JSON")
+    extract.add_argument("--image", type=Path, required=True, help="one sheet: PDF, JPEG or PNG")
+    extract.add_argument("--confirm-cloud", action="store_true")
+    extract.set_defaults(handler=_handle_extract)
+
     doctor = _leaf(
         commands,
         "doctor",
@@ -809,6 +822,34 @@ def _short_error(error: BaseException) -> str:
     """One line naming the failure; our engines never put sheet content in errors."""
     message = " ".join(str(error).split())[:200]
     return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
+def _handle_extract(arguments: argparse.Namespace) -> int:
+    """Print the handover record for one sheet; exit 3 when it needs review.
+
+    This is the production path, so the record contains the sheet's values:
+    run it on the local PC only.
+    """
+    built = _build_pipeline_from(arguments.pipeline, confirm_cloud=bool(arguments.confirm_cloud))
+    try:
+        prepared = preprocess(arguments.image)
+    except PreprocessError as error:
+        raise _CliInputError(f"cannot read the sheet: {_short_error(error)}") from None
+    record = handover_record(
+        built.pipeline.extract(prepared), pipeline_id=built.pipeline.pipeline_id
+    )
+    compact = bool(getattr(arguments, "json", False))
+    print(
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            indent=None if compact else 2,
+            separators=(",", ":") if compact else None,
+        )
+    )
+    return 0 if record["ready"] else 3
 
 
 def _handle_doctor(arguments: argparse.Namespace) -> int:

@@ -193,6 +193,9 @@ uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
 - `ocrbench dataset answers-from-pdf` writes the answers CSV from a digital
   PDF, named after the scans or photos of its printed pages. Full steps for
   Kimura's sheets: [`docs/kimura-benchmark-run.md`](docs/kimura-benchmark-run.md).
+- `ocrbench extract --pipeline <config> --image <sheet>` reads one sheet and
+  prints the record the EDI registration script consumes (exit 0 = ready,
+  3 = needs review): [`docs/edi-handover-format.md`](docs/edi-handover-format.md).
 - Before real sheets, run every candidate on synthetic sheets:
   [`docs/synthetic-dry-run.md`](docs/synthetic-dry-run.md) (T25).
 - Existing ADR-0001 commands (`run --model --prompt-name`, `report`,
