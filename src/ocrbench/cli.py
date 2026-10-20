@@ -38,6 +38,7 @@ from ocrbench.leaderboard import (
 from ocrbench.metrics import aggregate, paired_comparison, reproducibility
 from ocrbench.ocr_engines import CloudNotAllowedError
 from ocrbench.ollama_adapter import ModelNotFoundError, create_adapter
+from ocrbench.parts.commands import register as register_parts_commands
 from ocrbench.pdf_pages import (
     PdfSplitError,
     answers_from_pdf,
@@ -538,6 +539,8 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--confirm-cloud", action="store_true")
     extract.set_defaults(handler=_handle_extract)
 
+    register_parts_commands(commands, leaf=_leaf, shared=shared, read_sheet_text=_sheet_text)
+
     doctor = _leaf(
         commands,
         "doctor",
@@ -822,6 +825,19 @@ def _short_error(error: BaseException) -> str:
     """One line naming the failure; our engines never put sheet content in errors."""
     message = " ".join(str(error).split())[:200]
     return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
+def _sheet_text(sheet: Path, pipeline: Path, confirm_cloud: bool) -> str:
+    """Run a pipeline's Layer 1 on one sheet and return its text (for ``parts``)."""
+    built = _build_pipeline_from(pipeline, confirm_cloud=confirm_cloud)
+    try:
+        prepared = preprocess(sheet)
+    except PreprocessError as error:
+        raise _CliInputError(f"cannot read the sheet: {_short_error(error)}") from None
+    result = built.pipeline.extract(prepared)
+    if result.layer1_text is None:
+        raise _CliInputError(f"the pipeline read no text: {result.error or result.status.value}")
+    return result.layer1_text
 
 
 def _handle_extract(arguments: argparse.Namespace) -> int:

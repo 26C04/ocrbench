@@ -201,8 +201,21 @@ uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
 - Existing ADR-0001 commands (`run --model --prompt-name`, `report`,
   `export-summary` and `compare-runs` on ADR-0001 runs) are unchanged.
 
+## Part verification (Phase 2)
+
+`ocrbench parts check` compares a photographed part with what its sheet prints:
+stock size `φD × L`, through holes and shape. A printed ArUco marker sets the
+scale. It exits 0 for pass, 3 for fail and 4 for cannot check, always with
+reasons. Confirmed parts go into a registry, so repeat part numbers are also
+compared with earlier shipments. SAM3 plugs in as `--segmenter sam3`. Setup,
+rules and calibration are in
+[`docs/part-verification.md`](docs/part-verification.md). A demo with invented
+data: `uv run python -m scripts.make_synthetic_parts --out <folder>`.
+
 ## Confidentiality rules
 
+- Never commit part photos, part masks, `parts check` records or the parts
+  registry; the `parts` commands refuse to write them inside the repository.
 - Never commit real production instructions, ground-truth JSON, individual
   predictions, or detailed error diffs.
 - Store real datasets and run outputs only in repository-external directories

@@ -109,6 +109,12 @@ Steps the script automates:
   answer key: ask Kimura for the PDF of every sheet they scan or photograph for us
 - Added `doctor`, `run-all`, `leaderboard`, `dataset answers-from-pdf` (answer key from the PDF,
   matched to scans/photos by page number)
+- 20 Oct: Phase 2 part check built (`ocrbench parts`, `src/ocrbench/parts/`,
+  `docs/part-verification.md`). It needs no CAD: it checks the photo against the sheet's stock size
+  `φD × L`, shape class and through holes, with an ArUco marker for scale. It also has a
+  learn-as-you-ship registry, a SAM3 adapter (transformers, GPU PC only), calibration from
+  confirmed parts, and a barcode reader for the 伝票No. Tolerances are uncalibrated until about
+  20 confirmed parts are photographed at Kimura
 - **Next:** on the Windows machine follow `docs/kimura-benchmark-run.md`: scan and photograph the
   51 printed sheets, build the answer key from the PDF, run A1L, A2, A3, B, A1R on dev;
   group decides D2 (customer matching)

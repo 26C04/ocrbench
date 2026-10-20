@@ -9,10 +9,13 @@ description = "Local OCR benchmark foundation for production instructions."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "numpy>=2.5.4",
     "ollama>=0.6.1",
+    "opencv-python-headless>=5.0.0.93",
     "pillow>=12.1.0",
     "pydantic>=2.12.5",
     "pypdfium2>=5.4.0",
+    "zxing-cpp>=3.1.1",
 ]
 
 [project.scripts]
@@ -32,6 +35,8 @@ target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF"]
+# Sheets print sizes as "φ36 × 100"; the multiplication sign is meant.
+allowed-confusables = ["×"]
 
 [tool.mypy]
 strict = true
