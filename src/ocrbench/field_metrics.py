@@ -25,6 +25,7 @@ from ocrbench.edi_fields import (
     normalize_order_no,
 )
 from ocrbench.metrics import bootstrap_ci, mcnemar_exact, percentile, wilson_interval
+from ocrbench.normalize import UNIT_SUFFIXES
 from ocrbench.pipelines import PipelineResult, PipelineStatus
 
 CLOUD_MARGIN: Final[float] = 0.02
@@ -89,9 +90,27 @@ def _search_text(text: str) -> str:
     return _WHITESPACE.sub("", unicodedata.normalize("NFKC", text))
 
 
+_UNIT_PATTERN = "|".join(
+    re.escape(unit) for unit in sorted({u.upper() for u in UNIT_SUFFIXES}, key=len, reverse=True)
+)
+_QUANTITY_LABEL = "個数"
+
+
 def _quantity_in(text: str, quantity: int) -> bool:
-    normalized = _DIGIT_GROUPING.sub("", unicodedata.normalize("NFKC", text))
-    return re.search(rf"(?<!\d){quantity}(?!\d)", normalized) is not None
+    """Return whether ``quantity`` is printed as a quantity, not just as some number.
+
+    Small numbers such as 1, 2 or 8 also appear on a sheet as row numbers and
+    order counts, so a bare number is not evidence that Layer 1 read the
+    quantity. It counts only when followed by a unit (``8PC``, ``8 個``) or
+    directly after the 個数 label (``個数 8``), after NFKC folding.
+    """
+    normalized = _DIGIT_GROUPING.sub("", unicodedata.normalize("NFKC", text)).upper()
+    number = rf"(?<!\d){quantity}(?!\d)"
+    with_unit = rf"{number}\s*(?:{_UNIT_PATTERN})"
+    after_label = rf"{_QUANTITY_LABEL}[\s:|]*{quantity}(?!\d)"
+    return re.search(with_unit, normalized) is not None or (
+        re.search(after_label, _WHITESPACE.sub(" ", normalized)) is not None
+    )
 
 
 def value_in_layer1_text(

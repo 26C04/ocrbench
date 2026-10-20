@@ -138,7 +138,13 @@ def test_layer_attribution() -> None:
         ("個数 1PC", True),
         ("個数 12", False),
         ("1,000", False),
-        ("\uff11", True),
+        ("\uff11 pcs", True),
+        ("個数\n\uff11", True),
+        ("1 個", True),
+        # A bare number is not the quantity: row numbers and counts share small values.
+        ("\uff11", False),
+        ("1 CL-2 0.70 個数 BPC", False),
+        ("受注数 1", False),
     ],
 )
 def test_quantity_must_appear_as_a_whole_number(text: str, found: bool) -> None:
