@@ -39,7 +39,7 @@ Sheet image → [Layer 1: OCR] → raw text → [Layer 2: local LLM] → 4 field
 |-------|----------|---------|-------|
 | Customer | 受注先 | Nidecマシンツール株式会社 | Determines which EDI system |
 | Part number | 部番 | HR237101021 | Cross-check with EDI row |
-| Order number | 受注No | 023235 | Strip "-2025" suffix (contested, see ADR-0002 D1) |
+| Order number | 受注No | 023235-2025 | Keep the "-2025" ending (owner's call, 16 Oct; ADR-0002 D1) |
 | Quantity | 個数 | 1 | Strip "PC" unit |
 
 ### Benchmark scoring metrics
@@ -91,14 +91,15 @@ Steps the script automates:
 
 ---
 
-## Current status (as of 14 Oct 2026)
+## Current status (as of 20 Oct 2026)
 
-- Steps 0–4 of ADR-0002 done in PR #23 (CI green); next is Step 5 (runner, CLI, reports, ground truth from CSV)
+- Steps 0–4 and Step 5 part 1 (answers CSV import) done in PR #23 (CI green, 577 tests, no reviews yet)
+- **Next: Step 5 part 2, the pipeline run command** (planned 16 Oct, not started), then the report and the T25 dry run
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
-- **A test EDI website is available** to log in and enter values; use it to settle ADR-0002 D1 ("-2025" ending)
-- Still waiting on Kimura: cloud approval for Mistral OCR
-- Phase 2 (SAM3) starting
-- Full status and next steps: [HANDOVER.md](HANDOVER.md)
+- ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
+- Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)
+- Dates: slides v1 21 Oct, engineers 28 Oct, midterm 30 Oct
+- Full status, next steps and report preferences: [HANDOVER.md](HANDOVER.md) (start at §0)
 
 ---
 
