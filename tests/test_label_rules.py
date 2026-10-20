@@ -386,3 +386,51 @@ def test_extract_prints_the_edi_handover_record(
         PipelineStatus.ERROR, None, None, None, None, 1.0, 0.0, 0, error="boom"
     )
     assert handover_record(errored, pipeline_id="X")["edi"]["order_no_without_year"] is None
+
+
+@pytest.mark.parametrize(
+    ("text", "field", "expected"),
+    [
+        # Found in review: each used to return a truncated or borrowed value.
+        (
+            "受注先 Nidec マシンツール株式会社 送り先 外注課",
+            "customer",
+            "Nidec マシンツール株式会社",
+        ),
+        ("受注先 送り先 外注課", "customer", None),
+        ("受注先\n部番 HR900000001", "customer", None),
+        ("受注No 123456-2O26", "order_no", None),
+        ("受注No 123456 -2026", "order_no", None),
+        ("部番 HR1234/56789", "part_no", None),
+        ("個数 1O個", "quantity", None),
+        ("個数\n3 備考", "quantity", None),
+        # Still read correctly.
+        ("受注No 123456-2026 。 | 部品名", "order_no", "123456-2026"),
+        ("部番 HR900000001 |", "part_no", "HR900000001"),
+        ("個\r\n数 8PC\r\n1 CL-2", "quantity", 8),
+    ],
+)
+def test_rules_reject_rather_than_truncate(text: str, field: str, expected: object) -> None:
+    assert getattr(extract_fields(text), field) == expected
+
+
+def test_split_pdf_removes_a_half_written_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pypdfium2  # type: ignore[import-untyped]
+
+    source = tmp_path / "two.pdf"
+    source.write_bytes(make_text_pdf_bytes([["部番 HR900000001"], ["部番 HR900000002"]]))
+    calls = {"n": 0}
+    real_save = pypdfium2.PdfDocument.save
+
+    def failing_save(self: object, stream: object, *args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk full")
+        return real_save(self, stream, *args, **kwargs)
+
+    monkeypatch.setattr(pypdfium2.PdfDocument, "save", failing_save)
+    with pytest.raises(OSError, match="disk full"):
+        split_pdf(source, tmp_path / "out")
+    assert list((tmp_path / "out").iterdir()) == []

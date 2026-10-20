@@ -51,10 +51,10 @@ def split_pdf(pdf_path: Path, out_dir: Path, *, prefix: str = "sheet") -> list[P
                 try:
                     page_document.import_pages(source, [index])
                     with target.open("xb") as stream:
+                        written.append(target)  # created: remove it if anything below fails
                         page_document.save(stream)
                 finally:
                     page_document.close()
-                written.append(target)
         except BaseException:
             for path in written:
                 path.unlink(missing_ok=True)

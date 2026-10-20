@@ -219,6 +219,22 @@ def test_run_all_rejects_colliding_run_ids(
     assert "same run ID" in capsys.readouterr().err
 
 
+def test_run_all_refuses_an_existing_leaderboard_before_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    env: tuple[Path, Manifest, Path],
+) -> None:
+    root, manifest, runs = env
+    paths = _install(monkeypatch, _candidates(root, manifest), tmp_path)
+    out = tmp_path / "board.md"
+    out.write_text("old", encoding="utf-8")
+    arguments = ["run-all", "--pipelines", str(paths[0]), "--split", "dev", "--run-prefix", "x"]
+    assert main([*arguments, "--leaderboard-out", str(out)]) == 2
+    assert "already exists" in capsys.readouterr().err
+    assert not runs.exists()
+
+
 def test_doctor_reports_each_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

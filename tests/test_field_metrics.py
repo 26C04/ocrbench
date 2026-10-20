@@ -274,3 +274,8 @@ def test_worse_cloud_keeps_local_and_margin_is_validated() -> None:
     assert decision.reasons[1] == "cloud is not more accurate"
     with pytest.raises(ValueError, match="margin"):
         decide_cloud(_scores([4]), _scores([4]), margin=1.5)
+
+
+def test_quantity_label_split_over_two_lines_counts_as_read() -> None:
+    assert value_in_layer1_text(GT, "quantity", "個\n数\n1")
+    assert value_in_layer1_text(GT, "quantity", "個 数 1")

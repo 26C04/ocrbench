@@ -38,10 +38,13 @@ Check that each folder now holds one file per page, in page order.
 $pdf = "D:\incoming\sheets.pdf"
 uv run ocrbench dataset answers-from-pdf --pdf $pdf --out D:\incoming\scans.csv  --file-pattern "scan-{page:03d}.jpg"  --source-kind scan
 uv run ocrbench dataset answers-from-pdf --pdf $pdf --out D:\incoming\photos.csv --file-pattern "photo-{page:03d}.jpg" --source-kind photo
-Get-Content D:\incoming\scans.csv | Set-Content -Encoding utf8 D:\incoming\answers.csv
-Get-Content D:\incoming\photos.csv | Select-Object -Skip 1 | Add-Content -Encoding utf8 D:\incoming\answers.csv
+Get-Content -Encoding utf8 D:\incoming\scans.csv | Set-Content -Encoding utf8 D:\incoming\answers.csv
+Get-Content -Encoding utf8 D:\incoming\photos.csv | Select-Object -Skip 1 | Add-Content -Encoding utf8 D:\incoming\answers.csv
 ```
 
+- `-Encoding utf8` on every `Get-Content` matters: without it Windows
+  PowerShell 5.1 reads the file in the Japanese code page and garbles the
+  customer name, and `import-answers` then rejects every row.
 - About 60% of pages go to **final**, chosen by a fixed seed. The scan and
   the photo of the same page always land in the same split.
 - If a command lists pages with blank fields, type those values from the

@@ -896,6 +896,8 @@ def _handle_run_all(arguments: argparse.Namespace) -> int:
     data_root = resolve_split_dir(split)
     manifest = load_manifest(data_root, ground_truth="edi_fields")
     paths = cast(list[Path], arguments.pipelines)
+    if arguments.leaderboard_out is not None and arguments.leaderboard_out.exists():
+        raise _CliInputError("--leaderboard-out already exists; choose a new file before running")
     run_ids = [_run_id_for(arguments.run_prefix, path) for path in paths]
     if len(set(run_ids)) != len(run_ids):
         raise _CliInputError("two pipeline files map to the same run ID; rename one")

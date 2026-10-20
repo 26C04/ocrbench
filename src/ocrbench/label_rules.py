@@ -29,15 +29,34 @@ from ocrbench.pipelines import (
 )
 from ocrbench.preprocess import PreprocessResult
 
-RULES_VERSION: Final[str] = "1"
-_SEPARATORS: Final[str] = r"[\s:|]*"
+RULES_VERSION: Final[str] = "2"
+# Separators between a label and its value never cross a line break, so an
+# empty cell cannot borrow the next line's value.
+_SEP: Final[str] = r"[ \t\u3000:|]*"
+# A value must end at whitespace, a table border, 。 or the end of the text, so
+# a misread character inside it (2O26, 1O個) rejects the value instead of
+# cutting it short.
+_END: Final[str] = r"(?=[\s|。]|$)"
+_LABELS: Final[tuple[str, ...]] = (
+    "受注先",
+    "送り先",
+    "発送先",
+    "部番",
+    "部品名",
+    "受注NO",
+    "受注日",
+    "個数",
+    "営業",
+)
 _PATTERNS: Final[dict[str, re.Pattern[str]]] = {
-    # The customer ends at whitespace, a table border, or the next label (送り先).
-    "customer": re.compile(rf"受注先{_SEPARATORS}([^\s|]+?)(?=送り先|[\s|]|$)"),
-    "part_no": re.compile(rf"部番{_SEPARATORS}([A-Z0-9][A-Z0-9-]{{3,}})(?![A-Z0-9-])"),
-    "order_no": re.compile(rf"受注\s*NO\.?{_SEPARATORS}([0-9][0-9-]*[0-9])(?![0-9])"),
+    # The customer runs to the next label (送り先), a table border or the line end;
+    # spaces inside the name are kept (customer matching ignores them).
+    "customer": re.compile(rf"受注先{_SEP}([^\n|]+?)[ \t\u3000]*(?=送り先|\||\r?$)", re.MULTILINE),
+    "part_no": re.compile(rf"部番{_SEP}([A-Z0-9][A-Z0-9-]{{3,}}){_END}"),
+    # A space followed by "-" means the order number was split; reject it.
+    "order_no": re.compile(rf"受注\s*NO\.?{_SEP}([0-9][0-9-]*[0-9]){_END}(?![ \t]*-)"),
     # 個数 may be split over two lines (個 / 数) in a narrow table cell.
-    "quantity": re.compile(rf"個\s*数{_SEPARATORS}([0-9][0-9,]*\s*(?:PCS|PC|個|本|枚)?)"),
+    "quantity": re.compile(rf"個\s*数{_SEP}([0-9][0-9,]*[ \t]*(?:PCS|PC|個|本|枚)?){_END}"),
 }
 
 
@@ -51,9 +70,18 @@ def _normalized(text: str) -> str:
     return unicodedata.normalize("NFKC", text).upper()
 
 
+def _is_label(value: str) -> bool:
+    compact = re.sub(r"\s+", "", value).upper()
+    return any(compact.startswith(label) for label in _LABELS)
+
+
 def _single(pattern: re.Pattern[str], text: str) -> str | None:
     values = {match.strip() for match in pattern.findall(text)}
-    return values.pop() if len(values) == 1 else None
+    values.discard("")
+    if len(values) != 1:
+        return None
+    value = values.pop()
+    return None if _is_label(value) else value
 
 
 def extract_fields(text: str) -> EdiFields:

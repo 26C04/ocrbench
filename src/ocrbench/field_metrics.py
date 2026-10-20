@@ -93,7 +93,7 @@ def _search_text(text: str) -> str:
 _UNIT_PATTERN = "|".join(
     re.escape(unit) for unit in sorted({u.upper() for u in UNIT_SUFFIXES}, key=len, reverse=True)
 )
-_QUANTITY_LABEL = "個数"
+_QUANTITY_LABEL = r"個\s*数"  # the label may be split over two lines in a narrow cell
 
 
 def _quantity_in(text: str, quantity: int) -> bool:
@@ -102,7 +102,7 @@ def _quantity_in(text: str, quantity: int) -> bool:
     Small numbers such as 1, 2 or 8 also appear on a sheet as row numbers and
     order counts, so a bare number is not evidence that Layer 1 read the
     quantity. It counts only when followed by a unit (``8PC``, ``8 個``) or
-    directly after the 個数 label (``個数 8``), after NFKC folding.
+    directly after the 個数 label (``個数 8``, also split as ``個 / 数``), after NFKC folding.
     """
     normalized = _DIGIT_GROUPING.sub("", unicodedata.normalize("NFKC", text)).upper()
     number = rf"(?<!\d){quantity}(?!\d)"
