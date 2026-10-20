@@ -161,3 +161,72 @@ def read_edi_ground_truth(root: Path, doc_id: str) -> EdiFields:
     """Return the synthetic ground truth written by :func:`make_edi_dataset`."""
     text = (root / "gt" / f"{doc_id}.json").read_text(encoding="utf-8")
     return EdiFields.model_validate_json(text)
+
+
+def make_text_pdf_bytes(pages: list[list[str]]) -> bytes:
+    """Build a digital PDF whose pages carry the given lines as a real text layer.
+
+    Any Unicode text works, Japanese included: each distinct character gets a
+    one-byte code, and the font's ``/ToUnicode`` map turns the codes back into
+    the original characters on extraction. Glyph shapes are irrelevant here.
+    """
+    alphabet = sorted({char for lines in pages for line in lines for char in line})
+    # Codes start at 0x21: pdfium treats control and space codes specially.
+    if len(alphabet) > 0xFE - 0x21 + 1:
+        raise ValueError("too many distinct characters for a one-byte test font")
+    code = {char: 0x21 + index for index, char in enumerate(alphabet)}
+    page_ids = [3 + 2 * index for index in range(len(pages))]
+    font_id = 3 + 2 * len(pages)
+    cmap_id = font_id + 1
+    kids = " ".join(f"{page_id} 0 R" for page_id in page_ids)
+    objects: list[bytes] = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{kids}] /Count {len(pages)} >>".encode(),
+    ]
+    for page_id, lines in zip(page_ids, pages, strict=True):
+        ops = ["BT", "/F1 12 Tf", "72 760 Td", "14 TL"]
+        ops.extend(f"<{''.join(f'{code[char]:02X}' for char in line)}> Tj T*" for line in lines)
+        ops.append("ET")
+        stream = "\n".join(ops).encode("ascii")
+        resources = f"/Resources << /Font << /F1 {font_id} 0 R >> >>"
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] {resources} "
+            f"/Contents {page_id + 1} 0 R >>".encode()
+        )
+        objects.append(f"<< /Length {len(stream)} >>\nstream\n".encode() + stream + b"\nendstream")
+    objects.append(
+        f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode {cmap_id} 0 R >>".encode()
+    )
+    entries = "\n".join(
+        f"<{index:02X}> <{''.join(f'{unit:04X}' for unit in _utf16_units(char))}>"
+        for char, index in code.items()
+    )
+    cmap = (
+        "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n"
+        "/CMapName /OcrbenchTest def /CMapType 2 def\n"
+        "1 begincodespacerange <00> <FF> endcodespacerange\n"
+        f"{len(code)} beginbfchar\n{entries}\nendbfchar\n"
+        "endcmap CMapName currentdict /CMap defineresource pop end end"
+    ).encode("ascii")
+    objects.append(f"<< /Length {len(cmap)} >>\nstream\n".encode() + cmap + b"\nendstream")
+
+    content = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for object_id, body in enumerate(objects, start=1):
+        offsets.append(len(content))
+        content.extend(f"{object_id} 0 obj\n".encode())
+        content.extend(body)
+        content.extend(b"\nendobj\n")
+    xref_offset = len(content)
+    content.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    content.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        content.extend(f"{offset:010d} 00000 n \n".encode())
+    trailer = f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+    content.extend(f"{trailer}startxref\n{xref_offset}\n%%EOF\n".encode())
+    return bytes(content)
+
+
+def _utf16_units(char: str) -> list[int]:
+    encoded = char.encode("utf-16-be")
+    return [int.from_bytes(encoded[i : i + 2], "big") for i in range(0, len(encoded), 2)]

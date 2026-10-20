@@ -13,7 +13,11 @@ freeze rule). Examples::
     {"kind": "external", "pipeline_id": "C", "command": ["python", "harness.py"],
      "timeout_s": 120, "version": "1.0"}
 
-OCR engines are ``tesseract``, ``paddleocr``, ``qwen_vl`` and ``mistral``.
+    {"kind": "ocr_rules", "pipeline_id": "A0R", "ocr": {"engine": "pdf_text"}}
+
+OCR engines are ``tesseract``, ``paddleocr``, ``qwen_vl``, ``mistral`` and
+``pdf_text`` (the text layer of a digital PDF, no OCR). ``ocr_rules`` replaces
+the Layer 2 LLM with the label rules in :mod:`ocrbench.label_rules`.
 Mistral is a cloud engine and needs all three locks (ADR-0002 §6). Prompts
 come from the prompt registry, so their content hash is recorded.
 """
@@ -30,11 +34,13 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from ocrbench.config import OcrBenchError
+from ocrbench.label_rules import OcrRulesPipeline
 from ocrbench.ocr_engines import (
     DEFAULT_LINE_MIN_RUN_PX,
     DEFAULT_MISTRAL_USD_PER_PAGE,
     MistralOcrEngine,
     PaddleOcrEngine,
+    PdfTextLayerEngine,
     QwenVlTranscribeEngine,
     TesseractEngine,
 )
@@ -50,7 +56,17 @@ from ocrbench.prompts import PromptVersion
 
 _PIPELINE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:+-]{0,63}$")
 _UNION_TAGS: Final = frozenset(
-    {"ocr_llm", "vision", "external", "tesseract", "paddleocr", "qwen_vl", "mistral"}
+    {
+        "ocr_llm",
+        "ocr_rules",
+        "vision",
+        "external",
+        "tesseract",
+        "paddleocr",
+        "qwen_vl",
+        "mistral",
+        "pdf_text",
+    }
 )
 """Discriminator values pydantic inserts into error locations; not key names."""
 
@@ -90,8 +106,12 @@ class MistralConfig(_Strict):
     usd_per_page: Annotated[float, Field(ge=0)] = DEFAULT_MISTRAL_USD_PER_PAGE
 
 
+class PdfTextConfig(_Strict):
+    engine: Literal["pdf_text"]
+
+
 type OcrConfig = Annotated[
-    TesseractConfig | PaddleOcrConfig | QwenVlConfig | MistralConfig,
+    TesseractConfig | PaddleOcrConfig | QwenVlConfig | MistralConfig | PdfTextConfig,
     Field(discriminator="engine"),
 ]
 
@@ -114,6 +134,11 @@ class OcrLlmConfig(_PipelineBase):
     prompt_name: Annotated[str, Field(min_length=1)]
 
 
+class OcrRulesConfig(_PipelineBase):
+    kind: Literal["ocr_rules"]
+    ocr: OcrConfig
+
+
 class VisionConfig(_PipelineBase):
     kind: Literal["vision"]
     model: Annotated[str, Field(min_length=1)]
@@ -128,10 +153,13 @@ class ExternalConfig(_PipelineBase):
 
 
 class _ConfigFile(_Strict):
-    config: Annotated[OcrLlmConfig | VisionConfig | ExternalConfig, Field(discriminator="kind")]
+    config: Annotated[
+        OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig,
+        Field(discriminator="kind"),
+    ]
 
 
-type PipelineConfig = OcrLlmConfig | VisionConfig | ExternalConfig
+type PipelineConfig = OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig
 
 
 def parse_pipeline_config(text: str) -> PipelineConfig:
@@ -194,6 +222,8 @@ def _ocr_engine(
             return MistralOcrEngine(
                 confirmed=confirm_cloud, model=config.model, usd_per_page=config.usd_per_page
             )
+        case PdfTextConfig():
+            return PdfTextLayerEngine()
 
 
 def _prompt_record(prompt: PromptVersion) -> dict[str, str]:
@@ -233,6 +263,12 @@ def build_pipeline(
                 "llm_digest": ollama.resolve_digest(config.llm_model),
             }
             return BuiltPipeline(ocr_llm, record, cloud)
+        case OcrRulesConfig():
+            rules = OcrRulesPipeline(
+                pipeline_id=config.pipeline_id,
+                ocr=_ocr_engine(config.ocr, adapter=adapter, confirm_cloud=confirm_cloud),
+            )
+            return BuiltPipeline(rules, {}, isinstance(config.ocr, MistralConfig))
         case VisionConfig():
             vision_prompt = prompt(config.prompt_name)
             ollama = adapter()
@@ -261,6 +297,7 @@ __all__ = [
     "BuiltPipeline",
     "ExternalConfig",
     "OcrLlmConfig",
+    "OcrRulesConfig",
     "PipelineConfig",
     "PipelineConfigError",
     "VisionConfig",

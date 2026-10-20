@@ -1,0 +1,5 @@
+{
+  "kind": "ocr_rules",
+  "pipeline_id": "A0R",
+  "ocr": {"engine": "pdf_text"}
+}

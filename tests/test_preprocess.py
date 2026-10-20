@@ -183,7 +183,17 @@ def test_pdf_native_resources_close_when_bitmap_conversion_fails(
         def close(self) -> None:
             events.append("bitmap")
 
+    class TrackedTextPage:
+        def get_text_range(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            events.append("textpage")
+
     class TrackedPage:
+        def get_textpage(self) -> TrackedTextPage:
+            return TrackedTextPage()
+
         def render(self, *, scale: float) -> FailingBitmap:
             assert scale == 300 / 72
             return FailingBitmap()
@@ -208,7 +218,7 @@ def test_pdf_native_resources_close_when_bitmap_conversion_fails(
         preprocess(tmp_path / "tracked.pdf")
 
     assert isinstance(caught.value.__cause__, RuntimeError)
-    assert events == ["bitmap", "page", "document"]
+    assert events == ["textpage", "bitmap", "page", "document"]
 
 
 def test_pillow_images_close_when_png_encoding_fails(

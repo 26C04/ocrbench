@@ -28,6 +28,8 @@ class PreprocessResult:
     source_kind: Literal["pdf", "image"]
     duration_ms: float
     version: str
+    text_layer: str | None = None
+    """Text embedded in a digital PDF page; ``None`` for images and text-less PDFs."""
 
 
 class PreprocessError(OcrBenchError):
@@ -52,7 +54,7 @@ def _load_image(path: Path) -> Image.Image:
                 oriented.close()
 
 
-def _load_pdf(path: Path) -> Image.Image:
+def _load_pdf(path: Path) -> tuple[Image.Image, str | None]:
     document = pdfium.PdfDocument(path)
     try:
         page_count = len(document)
@@ -61,11 +63,16 @@ def _load_pdf(path: Path) -> Image.Image:
 
         page = document[0]
         try:
+            text_page = page.get_textpage()
+            try:
+                text = text_page.get_text_range()
+            finally:
+                text_page.close()
             bitmap = page.render(scale=_PDF_SCALE)
             try:
                 pillow_image = bitmap.to_pil()
                 try:
-                    return _rgb_copy(pillow_image)
+                    return _rgb_copy(pillow_image), (text if text.strip() else None)
                 finally:
                     pillow_image.close()
             finally:
@@ -88,11 +95,12 @@ def preprocess(path: Path) -> PreprocessResult:
 
     started = perf_counter()
     suffix = path.suffix.lower()
+    text_layer: str | None = None
 
     try:
         if suffix == ".pdf":
             source_kind: Literal["pdf", "image"] = "pdf"
-            image = _load_pdf(path)
+            image, text_layer = _load_pdf(path)
         elif suffix in _IMAGE_SUFFIXES:
             source_kind = "image"
             image = _load_image(path)
@@ -113,6 +121,7 @@ def preprocess(path: Path) -> PreprocessResult:
         source_kind=source_kind,
         duration_ms=(perf_counter() - started) * 1_000,
         version=PREPROCESS_VERSION,
+        text_layer=text_layer,
     )
 
 

@@ -392,6 +392,28 @@ class MistralOcrEngine:
         )
 
 
+class PdfTextLayerEngine:
+    """Candidate A0: read the text a digital PDF already contains, with no OCR.
+
+    Works only for PDFs printed straight from software. A scanned PDF, a photo
+    or any image has no text layer and fails with :class:`OcrEngineError`, so
+    such sheets show up as errors instead of silently empty text.
+    """
+
+    @property
+    def engine_id(self) -> str:
+        return "pdf-text"
+
+    def describe(self) -> dict[str, str]:
+        return {"name": "pdf-text-layer", "pypdfium2": _installed_version("pypdfium2")}
+
+    def transcribe(self, image: PreprocessResult) -> OcrResult:
+        started = perf_counter_ns()
+        if image.text_layer is None:
+            raise OcrEngineError("sheet has no PDF text layer")
+        return OcrResult(text=image.text_layer, duration_ms=elapsed_ms(started))
+
+
 def _paddle_lines(result: Any) -> list[str]:
     """Collect recognized lines from PaddleOCR 3.x or 2.x result shapes."""
     lines: list[str] = []

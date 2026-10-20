@@ -99,8 +99,13 @@ Steps the script automates:
 - Step 5 part 4 / T25 code done: synthetic sheet generator (`scripts/make_synthetic_sheets.py`),
   Layer 2 prompt `edi-fields`, Tesseract `remove_lines` option (A1L), run steps in
   `docs/synthetic-dry-run.md`
-- **Next: run the T25 dry run on the Windows machine** (A1, A1L, A2, A3, B; C when its command is
-  ready), then H6, the real benchmark on dev, then final
+- 20 Oct: Kimura's 51-page sample PDF (cleared for sharing; never commit it) was tested in a cloud
+  session. Tesseract alone: best 29/51 scans with part/order/quantity readable, customer 0/51,
+  photos about 3/51. The PDF is digital: `pdf_text` + label rules (A0R) read 51/51 sheets fully
+  correct. Added `pdf_text` engine, `ocr_rules` pipelines, `dataset split-pdf`, stricter
+  quantity check in layer attribution
+- **Next:** ask Kimura whether the PDF (not only paper) can reach the shipping desk; run the T25
+  dry run and the LLM candidates (A0, A1L, A2, A3, B) on the Windows machine
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
 - ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
 - Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)

@@ -1,0 +1,7 @@
+{
+  "kind": "ocr_llm",
+  "pipeline_id": "A0",
+  "ocr": {"engine": "pdf_text"},
+  "llm_model": "qwen3:8b",
+  "prompt_name": "edi-fields"
+}

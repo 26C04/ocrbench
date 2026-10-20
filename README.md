@@ -137,13 +137,30 @@ file, using explicit component framing so concatenation cannot be ambiguous.
 
 ## Running a pipeline (ADR-0002)
 
-Each candidate pipeline is one JSON file; examples for A1–A4 and B are in
-[`pipelines/`](pipelines/). `kind` is `ocr_llm` (an `ocr` engine of
-`tesseract`, `paddleocr`, `qwen_vl` or `mistral`, then `llm_model` with the
-registry prompt `prompt_name`), `vision` (`model`, `prompt_name`), or
-`external` (`command`, optional `timeout_s` and `version`; the program's
-stdout contract is documented on `ExternalCommandPipeline`). Register the
-Layer 2 prompt first with `ocrbench prompt add` and `ocrbench prompt activate`.
+Each candidate pipeline is one JSON file; examples are in
+[`pipelines/`](pipelines/). `kind` is one of:
+
+- `ocr_llm`: an `ocr` engine, then `llm_model` with the registry prompt
+  `prompt_name` (Layer 2 LLM). Register the prompt first with
+  `ocrbench prompt add` and `ocrbench prompt activate`.
+- `ocr_rules`: an `ocr` engine, then the label rules in
+  `src/ocrbench/label_rules.py` (read the value after 受注先, 部番, 受注No, 個数;
+  `null` when a label is missing or ambiguous). No LLM, no Ollama.
+- `vision` (`model`, `prompt_name`) or `external` (`command`, optional
+  `timeout_s` and `version`; stdout contract on `ExternalCommandPipeline`).
+
+OCR engines: `tesseract` (options `psm`, `remove_lines`), `paddleocr`,
+`qwen_vl`, `mistral` (cloud, locked) and `pdf_text`, which reads the text a
+digital PDF already contains, with no OCR. `pdf_text` fails on images and
+scanned PDFs, so those sheets show as errors, never as empty text.
+
+Kimura's system prints many sheets into one PDF. Split it into one-page PDFs
+(text layer kept) and get an answers template with the file names filled in:
+
+```powershell
+uv run ocrbench dataset split-pdf --pdf D:\incoming\sheets.pdf --out-dir D:\ocrbench-data\raw `
+    --prefix kimura --answers-template D:\answers.csv
+```
 
 ```powershell
 uv run ocrbench run --pipeline pipelines\A1-tesseract.json --split dev --run-id a1-dev

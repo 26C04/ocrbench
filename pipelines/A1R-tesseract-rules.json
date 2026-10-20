@@ -1,0 +1,5 @@
+{
+  "kind": "ocr_rules",
+  "pipeline_id": "A1R",
+  "ocr": {"engine": "tesseract", "languages": "jpn+eng", "psm": 4, "remove_lines": true}
+}

@@ -30,6 +30,7 @@ from ocrbench.field_metrics import compare, decide_cloud, summarize
 from ocrbench.metrics import aggregate, paired_comparison, reproducibility
 from ocrbench.ocr_engines import CloudNotAllowedError
 from ocrbench.ollama_adapter import ModelNotFoundError, create_adapter
+from ocrbench.pdf_pages import PdfSplitError, split_pdf, write_answers_template
 from ocrbench.pipeline_config import PipelineConfigError, build_pipeline, load_pipeline_config
 from ocrbench.pipeline_reporting import (
     write_pipeline_detail_report,
@@ -214,6 +215,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="CSV: file,source_kind,split,customer,part_no,order_no,quantity",
     )
     dataset_import.set_defaults(handler=_handle_dataset_import_answers)
+
+    dataset_split = _leaf(
+        dataset_commands,
+        "split-pdf",
+        shared=shared,
+        help_text="split a multi-page PDF into one-page PDFs, keeping the text layer",
+    )
+    dataset_split.add_argument("--pdf", type=Path, required=True, help="multi-page PDF")
+    dataset_split.add_argument(
+        "--out-dir", type=Path, required=True, help="folder for the pages, e.g. <root>/raw"
+    )
+    dataset_split.add_argument("--prefix", default="sheet", help="file-name prefix")
+    dataset_split.add_argument(
+        "--answers-template",
+        type=Path,
+        help="also write an answers CSV with the file column filled in",
+    )
+    dataset_split.set_defaults(handler=_handle_dataset_split_pdf)
 
     dataset_validate = _leaf(
         dataset_commands,
@@ -496,6 +515,16 @@ def _handle_dataset_import_answers(arguments: argparse.Namespace) -> None:
         payload,
         f"Imported answers and built manifest for {len(manifest.docs)} documents.",
     )
+
+
+def _handle_dataset_split_pdf(arguments: argparse.Namespace) -> None:
+    if arguments.answers_template is not None and arguments.answers_template.exists():
+        raise _CliInputError("--answers-template already exists; nothing was written")
+    pages = split_pdf(arguments.pdf, arguments.out_dir, prefix=arguments.prefix)
+    if arguments.answers_template is not None:
+        write_answers_template(pages, arguments.answers_template)
+    payload = {"n_pages": len(pages), "out_dir": str(arguments.out_dir)}
+    _emit(arguments, payload, f"Wrote {len(pages)} one-page PDFs to {arguments.out_dir}.")
 
 
 def _handle_dataset_validate(arguments: argparse.Namespace) -> None:
@@ -1114,6 +1143,7 @@ def main(argv: list[str] | None = None) -> int:
         _CliInputError,
         CloudNotAllowedError,
         ConfigError,
+        PdfSplitError,
         PipelineConfigError,
         DatasetError,
         PromptRegistryError,
