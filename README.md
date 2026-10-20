@@ -163,8 +163,14 @@ uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
 - `compare-runs` on two pipeline runs prints the paired comparison of B
   against A. When exactly one run is a cloud pipeline, it also prints the
   ADR-0002 §7 decision (local unless the cloud interval clears the margin).
-- Existing ADR-0001 commands (`run --model --prompt-name`, `compare-runs` on
-  ADR-0001 runs) are unchanged.
+- `report --run-dir <run>` writes `report.md` with every ADR-0002 metric
+  (field accuracy, sheets fully correct with Wilson interval, per-field
+  accuracy, silent errors, abstentions, which layer failed, time p50/p95,
+  cost) and no sheet data. `report --detail` (dev only) writes the local
+  `report_detail.md` with values and OCR text; `export-summary` (dev only)
+  writes the anonymous JSON that may be shared.
+- Existing ADR-0001 commands (`run --model --prompt-name`, `report`,
+  `export-summary` and `compare-runs` on ADR-0001 runs) are unchanged.
 
 ## Confidentiality rules
 

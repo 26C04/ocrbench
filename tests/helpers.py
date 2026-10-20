@@ -1,5 +1,6 @@
 """Reusable, code-generated test inputs that do not contain sensitive data."""
 
+import csv
 import hashlib
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from PIL import Image
 
 from ocrbench.dataset import DocEntry, Manifest, SourceKind, Split
+from ocrbench.edi_fields import EdiFields
 from ocrbench.schema import LineItem, OrderDocument
 
 
@@ -126,3 +128,36 @@ def make_mini_dataset(root: Path) -> Manifest:
         encoding="utf-8",
     )
     return manifest
+
+
+EDI_CUSTOMER = "Nidecマシンツール株式会社"
+EDI_ROWS: tuple[tuple[str, str, str, str, str, str, str], ...] = (
+    ("s0.png", "scan", "dev", EDI_CUSTOMER, "HR900000001", "900001-2025", "1 PC"),
+    ("s1.png", "photo", "dev", EDI_CUSTOMER, "HR900000002", "900002-2025", "2"),
+    ("s2.png", "scan", "dev", EDI_CUSTOMER, "HR900000003", "900003-2026", "3PC"),
+    ("s3.png", "scan", "final", EDI_CUSTOMER, "HR900000004", "900004-2026", "4"),
+    ("s4.png", "photo", "final", EDI_CUSTOMER, "HR900000005", "900005-2025", "5"),
+)
+"""Invented answers: 3 dev and 2 final sheets, scans and photos in both splits."""
+
+
+def make_edi_dataset(root: Path, answers_dir: Path) -> Manifest:
+    """Build a synthetic ADR-0002 ``edi_fields`` dataset through the real answers import."""
+    from ocrbench.edi_answers import ANSWER_COLUMNS, import_answers
+
+    (root / "raw").mkdir(parents=True)
+    for index, row in enumerate(EDI_ROWS):
+        color = (40 * index + 20, 255 - 30 * index, 90)
+        Image.new("RGB", (48, 32), color).save(root / "raw" / row[0], format="PNG")
+    answers = answers_dir / "answers.csv"
+    with answers.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(ANSWER_COLUMNS)
+        writer.writerows(EDI_ROWS)
+    return import_answers(root, answers)
+
+
+def read_edi_ground_truth(root: Path, doc_id: str) -> EdiFields:
+    """Return the synthetic ground truth written by :func:`make_edi_dataset`."""
+    text = (root / "gt" / f"{doc_id}.json").read_text(encoding="utf-8")
+    return EdiFields.model_validate_json(text)

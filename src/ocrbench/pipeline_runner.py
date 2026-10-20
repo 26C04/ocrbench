@@ -54,25 +54,25 @@ _GROUND_TRUTH: Final = "edi_fields"
 type PipelineSplit = Literal["dev", "final"]
 
 
-def _load_edi_ground_truth(data_root: Path, entry: DocEntry) -> EdiFields:
+def load_edi_ground_truth(data_root: Path, doc_id: str) -> EdiFields:
     """Read one anonymous GT file without following an alias or exposing its values."""
     gt_directory = data_root / "gt"
-    path = gt_directory / f"{entry.doc_id}.json"
+    path = gt_directory / f"{doc_id}.json"
     try:
         if _is_link_or_reparse(gt_directory) or _is_link_or_reparse(path):
-            raise RunnerError(f"Ground truth is unsafe for {entry.doc_id}")
+            raise RunnerError(f"Ground truth is unsafe for {doc_id}")
         root = gt_directory.resolve(strict=True)
         resolved = path.resolve(strict=True)
         details = path.stat(follow_symlinks=False)
         if resolved.parent != root or not stat.S_ISREG(details.st_mode):
-            raise RunnerError(f"Ground truth is unsafe for {entry.doc_id}")
+            raise RunnerError(f"Ground truth is unsafe for {doc_id}")
         with path.open("r", encoding="utf-8", newline="") as stream:
             value = json.load(stream, object_pairs_hook=_reject_duplicate_keys)
         return EdiFields.model_validate(value)
     except RunnerError:
         raise
     except OSError, UnicodeError, json.JSONDecodeError, ValueError:
-        raise RunnerError(f"Ground truth is invalid for {entry.doc_id}") from None
+        raise RunnerError(f"Ground truth is invalid for {doc_id}") from None
 
 
 def _git(*arguments: str) -> str | None:
@@ -157,7 +157,7 @@ def _extract(pipeline: Pipeline, prepared: PreprocessResult) -> PipelineResult:
 
 
 def _sheet_result(pipeline: Pipeline, data_root: Path, entry: DocEntry) -> SheetResult:
-    ground_truth = _load_edi_ground_truth(data_root, entry)
+    ground_truth = load_edi_ground_truth(data_root, entry.doc_id)
     try:
         prepared = preprocess(data_root / "raw" / entry.file)
     except PreprocessError:
@@ -267,4 +267,4 @@ def run_pipeline(
     )
 
 
-__all__ = ["code_version", "run_pipeline"]
+__all__ = ["code_version", "load_edi_ground_truth", "run_pipeline"]

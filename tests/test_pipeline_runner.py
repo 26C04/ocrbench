@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import json
 import sys
@@ -10,13 +9,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
 import ocrbench.cli as cli_module
 import ocrbench.pipeline_runner as runner_module
 from ocrbench.cli import main
 from ocrbench.dataset import Manifest, load_manifest
-from ocrbench.edi_answers import ANSWER_COLUMNS, import_answers
 from ocrbench.edi_fields import EdiFields
 from ocrbench.field_metrics import FieldOutcome, Layer
 from ocrbench.ocr_engines import CloudNotAllowedError
@@ -38,34 +35,7 @@ from ocrbench.preprocess import PreprocessResult, preprocess
 from ocrbench.prompts import PromptVersion
 from ocrbench.runner import RunnerError
 from ocrbench.splitguard import FinalAccessError
-
-_CUSTOMER = "Nidecマシンツール株式会社"
-_ROWS: tuple[tuple[str, str, str, str, str, str, str], ...] = (
-    ("s0.png", "scan", "dev", _CUSTOMER, "HR900000001", "900001-2025", "1 PC"),
-    ("s1.png", "photo", "dev", _CUSTOMER, "HR900000002", "900002-2025", "2"),
-    ("s2.png", "scan", "dev", _CUSTOMER, "HR900000003", "900003-2026", "3PC"),
-    ("s3.png", "scan", "final", _CUSTOMER, "HR900000004", "900004-2026", "4"),
-    ("s4.png", "photo", "final", _CUSTOMER, "HR900000005", "900005-2025", "5"),
-)
-
-
-def _make_dataset(root: Path, answers_dir: Path) -> Manifest:
-    """Build a synthetic edi_fields dataset through the real answers import."""
-    (root / "raw").mkdir(parents=True)
-    for index, row in enumerate(_ROWS):
-        color = (40 * index + 20, 255 - 30 * index, 90)
-        Image.new("RGB", (48, 32), color).save(root / "raw" / row[0], format="PNG")
-    answers = answers_dir / "answers.csv"
-    with answers.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(ANSWER_COLUMNS)
-        writer.writerows(_ROWS)
-    return import_answers(root, answers)
-
-
-def _ground_truth(root: Path, doc_id: str) -> EdiFields:
-    text = (root / "gt" / f"{doc_id}.json").read_text(encoding="utf-8")
-    return EdiFields.model_validate_json(text)
+from tests.helpers import make_edi_dataset, read_edi_ground_truth
 
 
 def _split_ids(manifest: Manifest, split: str) -> list[str]:
@@ -88,14 +58,14 @@ def _ok(fields: EdiFields, *, layer1_text: str | None = None, cost: float = 0.0)
 @pytest.fixture
 def dataset(tmp_path: Path) -> tuple[Path, Manifest]:
     root = tmp_path / "data"
-    return root, _make_dataset(root, tmp_path)
+    return root, make_edi_dataset(root, tmp_path)
 
 
 def _dev_results(root: Path, manifest: Manifest) -> list[PipelineResult]:
     """Sheet 0 correct, sheet 1 wrong part number (Layer 2), sheet 2 a format error."""
     ids = _split_ids(manifest, "dev")
-    first = _ground_truth(root, ids[0])
-    second = _ground_truth(root, ids[1])
+    first = read_edi_ground_truth(root, ids[0])
+    second = read_edi_ground_truth(root, ids[1])
     wrong = second.model_copy(update={"part_no": "HR999999999"})
     layer1 = f"{second.customer} {second.part_no} {second.order_no} {second.quantity}"
     return [
@@ -191,7 +161,9 @@ def test_final_split_needs_both_confirmations(
     dataset: tuple[Path, Manifest], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, manifest = dataset
-    pipeline = FakePipeline([_ok(_ground_truth(root, i)) for i in _split_ids(manifest, "final")])
+    pipeline = FakePipeline(
+        [_ok(read_edi_ground_truth(root, i)) for i in _split_ids(manifest, "final")]
+    )
     monkeypatch.delenv("OCRBENCH_ALLOW_FINAL", raising=False)
 
     with pytest.raises(FinalAccessError):
@@ -479,7 +451,7 @@ def _external_harness(tmp_path: Path, root: Path, manifest: Manifest) -> list[st
     answers: dict[str, object] = {}
     for entry in manifest.docs:
         png = preprocess(root / "raw" / entry.file).png_bytes
-        fields = _ground_truth(root, entry.doc_id).model_dump(mode="json")
+        fields = read_edi_ground_truth(root, entry.doc_id).model_dump(mode="json")
         answers[hashlib.sha256(png).hexdigest()] = fields
     mapping = tmp_path / "harness-answers.json"
     mapping.write_text(json.dumps(answers), encoding="utf-8")
@@ -533,7 +505,7 @@ def test_cli_runs_two_pipelines_and_compares_them(
     # A3 with a fake Ollama: transcription, then Layer 2 fields, per sheet.
     responses: list[str] = []
     for doc_id in _split_ids(manifest, "dev"):
-        gt = _ground_truth(root, doc_id)
+        gt = read_edi_ground_truth(root, doc_id)
         responses.append(json.dumps({"text": f"{gt.customer}\n{gt.order_no}\n{gt.quantity}"}))
         responses.append(json.dumps(gt.model_copy(update={"part_no": None}).model_dump()))
     adapter = FakeOllamaAdapter(responses, digest="sha256:fake-layer2")
@@ -577,11 +549,13 @@ def test_cli_compare_applies_the_cloud_rule(
 ) -> None:
     root, manifest, runs = cli_env
     ids = _split_ids(manifest, "dev")
-    perfect = [_ok(_ground_truth(root, i)) for i in ids]
+    perfect = [_ok(read_edi_ground_truth(root, i)) for i in ids]
     built: dict[str, BuiltPipeline] = {
         "local": BuiltPipeline(FakePipeline(perfect, pipeline_id="A1"), {}, False),
         "cloud": BuiltPipeline(
-            FakePipeline([_ok(_ground_truth(root, i), cost=0.004) for i in ids], pipeline_id="A4"),
+            FakePipeline(
+                [_ok(read_edi_ground_truth(root, i), cost=0.004) for i in ids], pipeline_id="A4"
+            ),
             {},
             True,
         ),

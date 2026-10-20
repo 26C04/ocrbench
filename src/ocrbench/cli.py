@@ -31,6 +31,11 @@ from ocrbench.metrics import aggregate, paired_comparison, reproducibility
 from ocrbench.ocr_engines import CloudNotAllowedError
 from ocrbench.ollama_adapter import ModelNotFoundError, create_adapter
 from ocrbench.pipeline_config import PipelineConfigError, build_pipeline, load_pipeline_config
+from ocrbench.pipeline_reporting import (
+    write_pipeline_detail_report,
+    write_pipeline_report,
+    write_pipeline_summary,
+)
 from ocrbench.pipeline_results import is_pipeline_run, load_pipeline_run
 from ocrbench.pipeline_runner import run_pipeline
 from ocrbench.prompts import (
@@ -703,7 +708,16 @@ def _handle_smoke(arguments: argparse.Namespace) -> int:
 
 
 def _handle_report(arguments: argparse.Namespace) -> None:
-    if arguments.detail:
+    if is_pipeline_run(arguments.run_dir):
+        if arguments.detail:
+            split = load_pipeline_run(arguments.run_dir).manifest.split
+            ensure_detail_report_allowed(split)
+            output = write_pipeline_detail_report(arguments.run_dir, resolve_split_dir(split))
+            kind = "detail"
+        else:
+            output = write_pipeline_report(arguments.run_dir)
+            kind = "aggregate"
+    elif arguments.detail:
         results = load_run(arguments.run_dir)
         ensure_detail_report_allowed(results.manifest.split)
         data_root = resolve_split_dir(results.manifest.split)
@@ -716,6 +730,14 @@ def _handle_report(arguments: argparse.Namespace) -> None:
 
 
 def _handle_export_summary(arguments: argparse.Namespace) -> None:
+    if is_pipeline_run(arguments.run_dir):
+        pipeline_results = load_pipeline_run(arguments.run_dir)
+        if pipeline_results.manifest.split != "dev":
+            raise _CliInputError("agent-facing summary export is restricted to Development runs")
+        output = write_pipeline_summary(arguments.run_dir, arguments.out)
+        payload = {"n_sheets": len(pipeline_results.sheets), "out": str(output), "split": "dev"}
+        _emit(arguments, payload, f"Wrote anonymous summary to {output}.")
+        return
     results = load_run(arguments.run_dir)
     if results.manifest.split != "dev":
         raise _CliInputError("agent-facing summary export is restricted to Development runs")
