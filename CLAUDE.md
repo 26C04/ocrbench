@@ -104,8 +104,11 @@ Steps the script automates:
   photos about 3/51. The PDF is digital: `pdf_text` + label rules (A0R) read 51/51 sheets fully
   correct. Added `pdf_text` engine, `ocr_rules` pipelines, `dataset split-pdf`, stricter
   quantity check in layer attribution
-- **Next:** ask Kimura whether the PDF (not only paper) can reach the shipping desk; run the T25
-  dry run and the LLM candidates (A0, A1L, A2, A3, B) on the Windows machine
+- Confirmed 20 Oct: sheets reach the shipping desk **only on paper**; data reaches customers only via
+  their EDI websites. OCR on paper is the real path. The PDF text layer (A0R) is used as an exact
+  answer key: ask Kimura for the PDF of every sheet they scan or photograph for us
+- **Next:** run the LLM candidates (A1L, A2, A3, B) on the Windows machine; get real scans and phone
+  photos of the 51 sample sheets; group decides D2 (customer matching)
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
 - ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
 - Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)
