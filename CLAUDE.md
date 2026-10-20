@@ -93,13 +93,17 @@ Steps the script automates:
 
 ## Current status (as of 20 Oct 2026)
 
-- Steps 0–4 and Step 5 part 1 (answers CSV import) done in PR #23 (CI green, 577 tests, no reviews yet)
-- **Next: Step 5 part 2, the pipeline run command** (planned 16 Oct, not started), then the report and the T25 dry run
+- Steps 0–4, Step 5 part 1 (answers CSV import) and Step 5 part 2 (pipeline runner,
+  `ocrbench run --pipeline`, `compare-runs` for pipeline runs) done in PR #23 (no reviews yet)
+- **Next: Step 5 part 3**, `report.md` and the anonymous summary for pipeline runs with the
+  ADR-0002 metrics (field accuracy, sheets fully correct with Wilson interval, per-field accuracy,
+  silent errors, layer attribution, time p50/p95, cost); per-sheet detail stays local.
+  Then **part 4 / T25**, a synthetic dry run of every local candidate (`tasks/T25-synthetic-dry-run.md`)
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
 - ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
 - Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)
 - Dates: slides v1 21 Oct, engineers 28 Oct, midterm 30 Oct
-- Full status, next steps and report preferences: [HANDOVER.md](HANDOVER.md) (start at §0)
+- PR #23 is pushed to only; never merge or approve it
 
 ---
 

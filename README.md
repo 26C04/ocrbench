@@ -135,6 +135,37 @@ Fingerprinting is independent of manifest document order. It hashes canonical
 sorted manifest data plus freshly streamed hashes of every raw and ground-truth
 file, using explicit component framing so concatenation cannot be ambiguous.
 
+## Running a pipeline (ADR-0002)
+
+Each candidate pipeline is one JSON file; examples for A1–A4 and B are in
+[`pipelines/`](pipelines/). `kind` is `ocr_llm` (an `ocr` engine of
+`tesseract`, `paddleocr`, `qwen_vl` or `mistral`, then `llm_model` with the
+registry prompt `prompt_name`), `vision` (`model`, `prompt_name`), or
+`external` (`command`, optional `timeout_s` and `version`; the program's
+stdout contract is documented on `ExternalCommandPipeline`). Register the
+Layer 2 prompt first with `ocrbench prompt add` and `ocrbench prompt activate`.
+
+```powershell
+uv run ocrbench run --pipeline pipelines\A1-tesseract.json --split dev --run-id a1-dev
+uv run ocrbench run --pipeline pipelines\A3-qwen-vl.json --split dev --run-id a3-dev
+uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
+```
+
+- The dataset must use `edi_fields` ground truth (`dataset import-answers`).
+  Only the `dev` and `final` splits are used; `final` still needs
+  `--confirm-final` plus `OCRBENCH_ALLOW_FINAL=1`, and prints counts only.
+- `results.json` and `manifest.json` go to `OCRBENCH_RUNS_DIR`. The manifest
+  records the pipeline description (engine versions, Tesseract data hashes,
+  Ollama model digests, prompt name and hash), the dataset fingerprint, the
+  `order_no` rule, and the code commit.
+- A Mistral (`A4`) config is refused unless `OCRBENCH_ALLOW_CLOUD=1`,
+  `MISTRAL_API_KEY`, and `--confirm-cloud` are all present.
+- `compare-runs` on two pipeline runs prints the paired comparison of B
+  against A. When exactly one run is a cloud pipeline, it also prints the
+  ADR-0002 §7 decision (local unless the cloud interval clears the margin).
+- Existing ADR-0001 commands (`run --model --prompt-name`, `compare-runs` on
+  ADR-0001 runs) are unchanged.
+
 ## Confidentiality rules
 
 - Never commit real production instructions, ground-truth JSON, individual

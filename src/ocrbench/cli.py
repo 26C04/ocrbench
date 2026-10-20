@@ -26,8 +26,13 @@ from ocrbench.dataset import (
     validate_split_minimums,
 )
 from ocrbench.edi_answers import import_answers
+from ocrbench.field_metrics import compare, decide_cloud, summarize
 from ocrbench.metrics import aggregate, paired_comparison, reproducibility
+from ocrbench.ocr_engines import CloudNotAllowedError
 from ocrbench.ollama_adapter import ModelNotFoundError, create_adapter
+from ocrbench.pipeline_config import PipelineConfigError, build_pipeline, load_pipeline_config
+from ocrbench.pipeline_results import is_pipeline_run, load_pipeline_run
+from ocrbench.pipeline_runner import run_pipeline
 from ocrbench.prompts import (
     PromptRegistryError,
     PromptVersion,
@@ -299,9 +304,20 @@ def build_parser() -> argparse.ArgumentParser:
         shared=shared,
         help_text="execute one deterministic benchmark run",
     )
-    run.add_argument("--model", required=True, help="allowlisted exact model tag")
+    run.add_argument("--model", help="allowlisted exact model tag (ADR-0001 run)")
     run.add_argument("--split", choices=("dev", "selection", "final"), required=True)
-    run.add_argument("--prompt-name", required=True, help="active prompt registry name")
+    run.add_argument("--prompt-name", help="active prompt registry name (ADR-0001 run)")
+    run.add_argument(
+        "--pipeline",
+        type=Path,
+        help="ADR-0002: pipeline configuration JSON; replaces --model and --prompt-name",
+    )
+    run.add_argument(
+        "--confirm-cloud",
+        action="store_true",
+        help="allow a cloud OCR engine; OCRBENCH_ALLOW_CLOUD=1 and MISTRAL_API_KEY are also "
+        "required",
+    )
     run.add_argument("--run-id", type=_run_id, help="stable run identifier")
     run.add_argument(
         "--confirm-final",
@@ -430,7 +446,13 @@ def build_parser() -> argparse.ArgumentParser:
         shared=shared,
         help_text="compare two paired runs or three reproducibility runs",
     )
-    compare.add_argument("--run-dirs", type=Path, nargs="+", required=True)
+    compare.add_argument(
+        "--run-dirs",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="two or three ADR-0001 runs, or two ADR-0002 pipeline runs (A then B)",
+    )
     compare.add_argument(
         "--confirm-final",
         action="store_true",
@@ -553,6 +575,13 @@ def _handle_prompt_rollback(arguments: argparse.Namespace) -> None:
 
 
 def _handle_run(arguments: argparse.Namespace) -> None:
+    if arguments.pipeline is not None:
+        _handle_pipeline_run(arguments)
+        return
+    if arguments.confirm_cloud:
+        raise _CliInputError("--confirm-cloud applies only to --pipeline runs")
+    if arguments.model is None or arguments.prompt_name is None:
+        raise _CliInputError("run requires --pipeline, or both --model and --prompt-name")
     model_tag = cast(str, arguments.model)
     if model_tag not in config.ALLOWED_MODELS:
         raise _CliInputError(f"model tag is not allowlisted: {model_tag!r}")
@@ -587,6 +616,57 @@ def _handle_run(arguments: argparse.Namespace) -> None:
     else:
         payload = {"n_docs": summary.n_docs, "run_dir": str(run_dir), "split": split}
         human = f"{console_summary_for(split, summary)}\nRun directory: {run_dir}"
+    _emit(arguments, payload, human)
+
+
+def _handle_pipeline_run(arguments: argparse.Namespace) -> None:
+    if arguments.model is not None or arguments.prompt_name is not None:
+        raise _CliInputError("--pipeline cannot be combined with --model or --prompt-name")
+    split = cast(Split, arguments.split)
+    if split == "selection":
+        raise _CliInputError("ADR-0002 pipeline runs use only the dev and final splits")
+    if split == "final":
+        ensure_final_allowed(confirm_final_flag=bool(arguments.confirm_final))
+    pipeline_config = load_pipeline_config(arguments.pipeline)
+    data_root = resolve_split_dir(split)
+    manifest = load_manifest(data_root, ground_truth="edi_fields")
+    built = build_pipeline(
+        pipeline_config,
+        adapter=create_adapter,
+        prompt=lambda name: get_active(_prompt_registry_root(), name),
+        confirm_cloud=bool(arguments.confirm_cloud),
+    )
+    run_dir = run_pipeline(
+        pipeline=built.pipeline,
+        data_root=data_root,
+        manifest=manifest,
+        split=split,
+        runs_root=config.runs_dir(),
+        run_id=arguments.run_id,
+        confirm_final_flag=bool(arguments.confirm_final),
+        record=built.record,
+        cloud=built.cloud,
+    )
+    results = load_pipeline_run(run_dir)
+    n_sheets = len(results.sheets)
+    if split == "dev":
+        summary = asdict(summarize(results.scores()))
+        payload: dict[str, Any] = {
+            "n_sheets": n_sheets,
+            "pipeline_id": results.manifest.pipeline_id,
+            "run_dir": str(run_dir),
+            "split": split,
+            "summary": summary,
+        }
+        human = f"Run directory: {run_dir}\n" + json.dumps(
+            summary, ensure_ascii=False, allow_nan=False, indent=2, sort_keys=True
+        )
+    else:
+        payload = {"n_sheets": n_sheets, "run_dir": str(run_dir), "split": split}
+        human = (
+            f"Completed {n_sheets} sheets. Run artifacts were written to the requested "
+            f"output directory.\nRun directory: {run_dir}"
+        )
     _emit(arguments, payload, human)
 
 
@@ -781,6 +861,12 @@ def _handle_loop_record(arguments: argparse.Namespace) -> None:
 
 def _handle_compare_runs(arguments: argparse.Namespace) -> None:
     run_dirs = cast(list[Path], arguments.run_dirs)
+    pipeline_runs = [is_pipeline_run(path) for path in run_dirs]
+    if any(pipeline_runs):
+        if not all(pipeline_runs):
+            raise _CliInputError("ADR-0001 runs and ADR-0002 pipeline runs cannot be compared")
+        _compare_pipeline_runs(arguments, run_dirs)
+        return
     if len(run_dirs) not in (2, 3):
         raise _CliInputError("compare-runs requires exactly two or three run directories")
     results = [load_run(path) for path in run_dirs]
@@ -811,6 +897,51 @@ def _handle_compare_runs(arguments: argparse.Namespace) -> None:
             f"identical prediction rate={summary.identical_prediction_rate:.6f}"
         )
     _emit(arguments, payload, human)
+
+
+def _compare_pipeline_runs(arguments: argparse.Namespace, run_dirs: Sequence[Path]) -> None:
+    """Paired comparison of two pipeline runs (B against A) and the cloud rule."""
+    if len(run_dirs) != 2:
+        raise _CliInputError("pipeline compare-runs requires exactly two run directories")
+    first, second = (load_pipeline_run(path) for path in run_dirs)
+    for field in ("split", "dataset_fingerprint", "order_no_rule"):
+        if getattr(first.manifest, field) != getattr(second.manifest, field):
+            raise _CliInputError(f"runs must share manifest field {field!r}")
+    if {sheet.sheet_id for sheet in first.sheets} != {sheet.sheet_id for sheet in second.sheets}:
+        raise _CliInputError("runs must contain the same sheet IDs")
+    if first.manifest.split == "final":
+        ensure_final_allowed(confirm_final_flag=bool(arguments.confirm_final))
+
+    comparison = compare(first.scores(), second.scores())
+    low, high = comparison.difference_ci
+    payload: dict[str, Any] = {
+        "kind": "field_comparison",
+        "pipeline_a": first.manifest.pipeline_id,
+        "pipeline_b": second.manifest.pipeline_id,
+        **asdict(comparison),
+    }
+    lines = [
+        f"Field comparison, B={second.manifest.pipeline_id} minus "
+        f"A={first.manifest.pipeline_id}: n={comparison.n_sheets}, "
+        f"difference={comparison.field_accuracy_difference:+.1%} "
+        f"(95% interval {low:+.1%} to {high:+.1%}), "
+        f"a_only={comparison.sheet_a_only}, b_only={comparison.sheet_b_only}, "
+        f"p={comparison.sheet_mcnemar_p_value:.6g}"
+    ]
+    if first.manifest.cloud != second.manifest.cloud:
+        local, cloud = (second, first) if first.manifest.cloud else (first, second)
+        decision = decide_cloud(local.scores(), cloud.scores())
+        payload["cloud_decision"] = {
+            "choice": decision.choice.value,
+            "cloud_pipeline": cloud.manifest.pipeline_id,
+            "local_pipeline": local.manifest.pipeline_id,
+            "margin": decision.margin,
+            "reasons": list(decision.reasons),
+        }
+        lines.append(
+            f"Cloud decision: {decision.choice.value} (" + "; ".join(decision.reasons) + ")"
+        )
+    _emit(arguments, payload, "\n".join(lines))
 
 
 def _prompt_registry_root() -> Path:
@@ -959,7 +1090,9 @@ def main(argv: list[str] | None = None) -> int:
         return error.status
     except (
         _CliInputError,
+        CloudNotAllowedError,
         ConfigError,
+        PipelineConfigError,
         DatasetError,
         PromptRegistryError,
         ResultsError,
