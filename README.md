@@ -135,6 +135,72 @@ Fingerprinting is independent of manifest document order. It hashes canonical
 sorted manifest data plus freshly streamed hashes of every raw and ground-truth
 file, using explicit component framing so concatenation cannot be ambiguous.
 
+## Running a pipeline (ADR-0002)
+
+Each candidate pipeline is one JSON file; examples are in
+[`pipelines/`](pipelines/). `kind` is one of:
+
+- `ocr_llm`: an `ocr` engine, then `llm_model` with the registry prompt
+  `prompt_name` (Layer 2 LLM). Register the prompt first with
+  `ocrbench prompt add` and `ocrbench prompt activate`.
+- `ocr_rules`: an `ocr` engine, then the label rules in
+  `src/ocrbench/label_rules.py` (read the value after 受注先, 部番, 受注No, 個数;
+  `null` when a label is missing or ambiguous). No LLM, no Ollama.
+- `vision` (`model`, `prompt_name`) or `external` (`command`, optional
+  `timeout_s` and `version`; stdout contract on `ExternalCommandPipeline`).
+
+OCR engines: `tesseract` (options `psm`, `remove_lines`), `paddleocr`,
+`qwen_vl`, `mistral` (cloud, locked) and `pdf_text`, which reads the text a
+digital PDF already contains, with no OCR. `pdf_text` fails on images and
+scanned PDFs, so those sheets show as errors, never as empty text.
+
+Kimura's system prints many sheets into one PDF. Split it into one-page PDFs
+(text layer kept) and get an answers template with the file names filled in:
+
+```powershell
+uv run ocrbench dataset split-pdf --pdf D:\incoming\sheets.pdf --out-dir D:\ocrbench-data\raw `
+    --prefix kimura --answers-template D:\answers.csv
+```
+
+```powershell
+uv run ocrbench run --pipeline pipelines\A1-tesseract.json --split dev --run-id a1-dev
+uv run ocrbench run --pipeline pipelines\A3-qwen-vl.json --split dev --run-id a3-dev
+uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
+```
+
+- The dataset must use `edi_fields` ground truth (`dataset import-answers`).
+  Only the `dev` and `final` splits are used; `final` still needs
+  `--confirm-final` plus `OCRBENCH_ALLOW_FINAL=1`, and prints counts only.
+- `results.json` and `manifest.json` go to `OCRBENCH_RUNS_DIR`. The manifest
+  records the pipeline description (engine versions, Tesseract data hashes,
+  Ollama model digests, prompt name and hash), the dataset fingerprint, the
+  `order_no` rule, and the code commit.
+- A Mistral (`A4`) config is refused unless `OCRBENCH_ALLOW_CLOUD=1`,
+  `MISTRAL_API_KEY`, and `--confirm-cloud` are all present.
+- `compare-runs` on two pipeline runs prints the paired comparison of B
+  against A. When exactly one run is a cloud pipeline, it also prints the
+  ADR-0002 §7 decision (local unless the cloud interval clears the margin).
+- `report --run-dir <run>` writes `report.md` with every ADR-0002 metric
+  (field accuracy, sheets fully correct with Wilson interval, per-field
+  accuracy, silent errors, abstentions, which layer failed, time p50/p95,
+  cost) and no sheet data. `report --detail` (dev only) writes the local
+  `report_detail.md` with values and OCR text; `export-summary` (dev only)
+  writes the anonymous JSON that may be shared.
+- `ocrbench doctor --pipelines <configs>` checks every candidate can start
+  (programs, Ollama models, prompts) without reading a sheet;
+  `ocrbench run-all` runs several configs and prints a leaderboard;
+  `ocrbench leaderboard --run-dirs <runs>` ranks existing runs.
+- `ocrbench dataset answers-from-pdf` writes the answers CSV from a digital
+  PDF, named after the scans or photos of its printed pages. Full steps for
+  Kimura's sheets: [`docs/kimura-benchmark-run.md`](docs/kimura-benchmark-run.md).
+- `ocrbench extract --pipeline <config> --image <sheet>` reads one sheet and
+  prints the record the EDI registration script consumes (exit 0 = ready,
+  3 = needs review): [`docs/edi-handover-format.md`](docs/edi-handover-format.md).
+- Before real sheets, run every candidate on synthetic sheets:
+  [`docs/synthetic-dry-run.md`](docs/synthetic-dry-run.md) (T25).
+- Existing ADR-0001 commands (`run --model --prompt-name`, `report`,
+  `export-summary` and `compare-runs` on ADR-0001 runs) are unchanged.
+
 ## Confidentiality rules
 
 - Never commit real production instructions, ground-truth JSON, individual

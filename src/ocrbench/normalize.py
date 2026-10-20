@@ -12,7 +12,7 @@ from datetime import date
 
 from ocrbench.schema import OrderDocument
 
-UNIT_SUFFIXES: tuple[str, ...] = ("個入", "pcs", "PCS", "pc", "個", "枚", "本")
+UNIT_SUFFIXES: tuple[str, ...] = ("個入", "pcs", "PCS", "pc", "PC", "個", "枚", "本")
 """Recognized trailing quantity units for ground-truth preparation."""
 
 _DATE_PATTERNS = tuple(

@@ -11,7 +11,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast
 
 from pydantic import ValidationError
 
@@ -19,13 +19,46 @@ from ocrbench import __version__, config
 from ocrbench.config import ConfigError, OcrBenchError
 from ocrbench.dataset import (
     DatasetError,
+    Manifest,
     build_manifest,
     dataset_fingerprint,
     load_manifest,
     validate_split_counts,
+    validate_split_minimums,
+)
+from ocrbench.edi_answers import import_answers
+from ocrbench.field_metrics import compare, decide_cloud, summarize
+from ocrbench.handover import handover_record
+from ocrbench.leaderboard import (
+    LeaderboardError,
+    build_leaderboard,
+    render_leaderboard,
+    write_leaderboard,
 )
 from ocrbench.metrics import aggregate, paired_comparison, reproducibility
+from ocrbench.ocr_engines import CloudNotAllowedError
 from ocrbench.ollama_adapter import ModelNotFoundError, create_adapter
+from ocrbench.pdf_pages import (
+    PdfSplitError,
+    answers_from_pdf,
+    split_pdf,
+    write_answers,
+    write_answers_template,
+)
+from ocrbench.pipeline_config import (
+    BuiltPipeline,
+    PipelineConfigError,
+    build_pipeline,
+    load_pipeline_config,
+)
+from ocrbench.pipeline_reporting import (
+    write_pipeline_detail_report,
+    write_pipeline_report,
+    write_pipeline_summary,
+)
+from ocrbench.pipeline_results import is_pipeline_run, load_pipeline_run
+from ocrbench.pipeline_runner import run_pipeline
+from ocrbench.preprocess import PreprocessError, preprocess
 from ocrbench.prompts import (
     PromptRegistryError,
     PromptVersion,
@@ -140,6 +173,17 @@ def _leaf(
     )
 
 
+def _positive_int(value: str) -> int:
+    """Parse a whole number of at least 1."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a whole number") from error
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return parsed
+
+
 def _run_id(value: str) -> str:
     """Validate a run ID during parsing, before any handler side effect."""
     if _RUN_ID_PATTERN.fullmatch(value) is None:
@@ -177,6 +221,62 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset_build.set_defaults(handler=_handle_dataset_build_manifest)
 
+    dataset_import = _leaf(
+        dataset_commands,
+        "import-answers",
+        shared=shared,
+        help_text="build an anonymous manifest and EDI ground truth from an answers CSV",
+    )
+    dataset_import.add_argument("--root", type=Path, required=True, help="dataset root directory")
+    dataset_import.add_argument(
+        "--answers",
+        type=Path,
+        required=True,
+        help="CSV: file,source_kind,split,customer,part_no,order_no,quantity",
+    )
+    dataset_import.set_defaults(handler=_handle_dataset_import_answers)
+
+    dataset_split = _leaf(
+        dataset_commands,
+        "split-pdf",
+        shared=shared,
+        help_text="split a multi-page PDF into one-page PDFs, keeping the text layer",
+    )
+    dataset_split.add_argument("--pdf", type=Path, required=True, help="multi-page PDF")
+    dataset_split.add_argument(
+        "--out-dir", type=Path, required=True, help="folder for the pages, e.g. <root>/raw"
+    )
+    dataset_split.add_argument("--prefix", default="sheet", help="file-name prefix")
+    dataset_split.add_argument(
+        "--answers-template",
+        type=Path,
+        help="also write an answers CSV with the file column filled in",
+    )
+    dataset_split.set_defaults(handler=_handle_dataset_split_pdf)
+
+    dataset_answers = _leaf(
+        dataset_commands,
+        "answers-from-pdf",
+        shared=shared,
+        help_text="write an answers CSV from a digital PDF's text layer (one row per page)",
+    )
+    dataset_answers.add_argument("--pdf", type=Path, required=True, help="digital PDF")
+    dataset_answers.add_argument("--out", type=Path, required=True, help="answers CSV to write")
+    dataset_answers.add_argument(
+        "--file-pattern",
+        default="sheet-{page:03d}.pdf",
+        help="file name of each page's image, e.g. scan-{page:03d}.jpg (default matches split-pdf)",
+    )
+    dataset_answers.add_argument("--source-kind", choices=("scan", "photo"), default="scan")
+    dataset_answers.add_argument(
+        "--final-share",
+        type=float,
+        default=0.6,
+        help="share of pages for the final split (ADR-0002: about 0.6)",
+    )
+    dataset_answers.add_argument("--seed", type=int, default=config.SEED)
+    dataset_answers.set_defaults(handler=_handle_dataset_answers_from_pdf)
+
     dataset_validate = _leaf(
         dataset_commands,
         "validate",
@@ -189,6 +289,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reject counts that differ from the ADR split table",
     )
+    _add_ground_truth_option(dataset_validate)
+    dataset_validate.add_argument(
+        "--min-per-split",
+        type=_positive_int,
+        default=None,
+        help="ADR-0002: require at least N dev and N final documents instead of the 40/20/40 table",
+    )
     dataset_validate.set_defaults(handler=_handle_dataset_validate)
 
     fingerprint = _leaf(
@@ -198,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="calculate the complete dataset fingerprint",
     )
     fingerprint.add_argument("--root", type=Path, required=True, help="dataset root directory")
+    _add_ground_truth_option(fingerprint)
     fingerprint.set_defaults(handler=_handle_dataset_fingerprint)
 
     prompt = commands.add_parser(
@@ -263,9 +371,20 @@ def build_parser() -> argparse.ArgumentParser:
         shared=shared,
         help_text="execute one deterministic benchmark run",
     )
-    run.add_argument("--model", required=True, help="allowlisted exact model tag")
+    run.add_argument("--model", help="allowlisted exact model tag (ADR-0001 run)")
     run.add_argument("--split", choices=("dev", "selection", "final"), required=True)
-    run.add_argument("--prompt-name", required=True, help="active prompt registry name")
+    run.add_argument("--prompt-name", help="active prompt registry name (ADR-0001 run)")
+    run.add_argument(
+        "--pipeline",
+        type=Path,
+        help="ADR-0002: pipeline configuration JSON; replaces --model and --prompt-name",
+    )
+    run.add_argument(
+        "--confirm-cloud",
+        action="store_true",
+        help="allow a cloud OCR engine; OCRBENCH_ALLOW_CLOUD=1 and MISTRAL_API_KEY are also "
+        "required",
+    )
     run.add_argument("--run-id", type=_run_id, help="stable run identifier")
     run.add_argument(
         "--confirm-final",
@@ -394,13 +513,75 @@ def build_parser() -> argparse.ArgumentParser:
         shared=shared,
         help_text="compare two paired runs or three reproducibility runs",
     )
-    compare.add_argument("--run-dirs", type=Path, nargs="+", required=True)
+    compare.add_argument(
+        "--run-dirs",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="two or three ADR-0001 runs, or two ADR-0002 pipeline runs (A then B)",
+    )
     compare.add_argument(
         "--confirm-final",
         action="store_true",
         help="confirm Final access; OCRBENCH_ALLOW_FINAL=1 is also required",
     )
     compare.set_defaults(handler=_handle_compare_runs)
+
+    extract = _leaf(
+        commands,
+        "extract",
+        shared=shared,
+        help_text="read one sheet with a pipeline and print the record for the EDI script",
+    )
+    extract.add_argument("--pipeline", type=Path, required=True, help="pipeline config JSON")
+    extract.add_argument("--image", type=Path, required=True, help="one sheet: PDF, JPEG or PNG")
+    extract.add_argument("--confirm-cloud", action="store_true")
+    extract.set_defaults(handler=_handle_extract)
+
+    doctor = _leaf(
+        commands,
+        "doctor",
+        shared=shared,
+        help_text="check that each pipeline config can start (tools, models, prompts)",
+    )
+    doctor.add_argument("--pipelines", type=Path, nargs="+", required=True)
+    doctor.add_argument("--confirm-cloud", action="store_true", help="also check cloud locks")
+    doctor.set_defaults(handler=_handle_doctor)
+
+    run_all = _leaf(
+        commands,
+        "run-all",
+        shared=shared,
+        help_text="run several pipeline configs on one split, then print a leaderboard",
+    )
+    run_all.add_argument("--pipelines", type=Path, nargs="+", required=True)
+    run_all.add_argument("--split", choices=("dev", "final"), required=True)
+    run_all.add_argument(
+        "--run-prefix", type=_run_id, required=True, help="run IDs become <prefix>-<config name>"
+    )
+    run_all.add_argument("--leaderboard-out", type=Path, help="also write the leaderboard here")
+    run_all.add_argument(
+        "--confirm-final",
+        action="store_true",
+        help="confirm Final access; OCRBENCH_ALLOW_FINAL=1 is also required",
+    )
+    run_all.add_argument("--confirm-cloud", action="store_true")
+    run_all.set_defaults(handler=_handle_run_all)
+
+    board = _leaf(
+        commands,
+        "leaderboard",
+        shared=shared,
+        help_text="rank pipeline runs on the same sheets and apply the cloud rule",
+    )
+    board.add_argument("--run-dirs", type=Path, nargs="+", required=True)
+    board.add_argument("--out", type=Path, help="also write the leaderboard as Markdown")
+    board.add_argument(
+        "--confirm-final",
+        action="store_true",
+        help="confirm Final access; OCRBENCH_ALLOW_FINAL=1 is also required",
+    )
+    board.set_defaults(handler=_handle_leaderboard)
     return parser
 
 
@@ -413,9 +594,79 @@ def _handle_dataset_build_manifest(arguments: argparse.Namespace) -> None:
     _emit(arguments, payload, f"Built manifest for {len(manifest.docs)} documents.")
 
 
+def _add_ground_truth_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ground-truth",
+        choices=("order_document", "edi_fields"),
+        default="order_document",
+        help="ground-truth format: ADR-0001 order_document (default) or ADR-0002 edi_fields",
+    )
+
+
+def _handle_dataset_import_answers(arguments: argparse.Namespace) -> None:
+    manifest = import_answers(arguments.root, arguments.answers)
+    payload = {
+        "manifest": str(arguments.root / "manifest.json"),
+        "n_docs": len(manifest.docs),
+    }
+    _emit(
+        arguments,
+        payload,
+        f"Imported answers and built manifest for {len(manifest.docs)} documents.",
+    )
+
+
+def _handle_dataset_split_pdf(arguments: argparse.Namespace) -> None:
+    if arguments.answers_template is not None and arguments.answers_template.exists():
+        raise _CliInputError("--answers-template already exists; nothing was written")
+    pages = split_pdf(arguments.pdf, arguments.out_dir, prefix=arguments.prefix)
+    if arguments.answers_template is not None:
+        write_answers_template(pages, arguments.answers_template)
+    payload = {"n_pages": len(pages), "out_dir": str(arguments.out_dir)}
+    _emit(arguments, payload, f"Wrote {len(pages)} one-page PDFs to {arguments.out_dir}.")
+
+
+def _handle_dataset_answers_from_pdf(arguments: argparse.Namespace) -> int:
+    if arguments.out.exists():
+        raise _CliInputError("--out already exists; nothing was written")
+    answers = answers_from_pdf(
+        arguments.pdf,
+        file_pattern=arguments.file_pattern,
+        source_kind=arguments.source_kind,
+        final_share=arguments.final_share,
+        seed=arguments.seed,
+    )
+    write_answers(answers, arguments.out)
+    n_final = sum(row[2] == "final" for row in answers.rows)
+    payload = {
+        "incomplete_pages": answers.incomplete_pages,
+        "n_dev": len(answers.rows) - n_final,
+        "n_final": n_final,
+        "out": str(arguments.out),
+    }
+    human = (
+        f"Wrote {len(answers.rows)} answer rows ({len(answers.rows) - n_final} dev, "
+        f"{n_final} final) to {arguments.out}."
+    )
+    if answers.incomplete_pages:
+        human += (
+            "\nFill in the blank fields by hand for pages: "
+            + ", ".join(map(str, answers.incomplete_pages))
+            + ". import-answers refuses the file until they are filled."
+        )
+    human += "\nHave a second person check the final rows against the sheets (ADR-0002 §3)."
+    _emit(arguments, payload, human)
+    return 1 if answers.incomplete_pages else 0
+
+
 def _handle_dataset_validate(arguments: argparse.Namespace) -> None:
-    manifest = load_manifest(arguments.root)
-    violations = validate_split_counts(manifest, strict=arguments.strict_counts)
+    manifest = load_manifest(arguments.root, ground_truth=arguments.ground_truth)
+    if arguments.min_per_split is None:
+        violations = validate_split_counts(manifest, strict=arguments.strict_counts)
+    else:
+        violations = validate_split_minimums(
+            manifest, minimum=arguments.min_per_split, strict=arguments.strict_counts
+        )
     payload = {
         "n_docs": len(manifest.docs),
         "split_count_warnings": violations,
@@ -430,7 +681,7 @@ def _handle_dataset_validate(arguments: argparse.Namespace) -> None:
 
 
 def _handle_dataset_fingerprint(arguments: argparse.Namespace) -> None:
-    manifest = load_manifest(arguments.root)
+    manifest = load_manifest(arguments.root, ground_truth=arguments.ground_truth)
     fingerprint = dataset_fingerprint(arguments.root, manifest)
     _emit(arguments, {"fingerprint": fingerprint}, fingerprint)
 
@@ -490,6 +741,13 @@ def _handle_prompt_rollback(arguments: argparse.Namespace) -> None:
 
 
 def _handle_run(arguments: argparse.Namespace) -> None:
+    if arguments.pipeline is not None:
+        _handle_pipeline_run(arguments)
+        return
+    if arguments.confirm_cloud:
+        raise _CliInputError("--confirm-cloud applies only to --pipeline runs")
+    if arguments.model is None or arguments.prompt_name is None:
+        raise _CliInputError("run requires --pipeline, or both --model and --prompt-name")
     model_tag = cast(str, arguments.model)
     if model_tag not in config.ALLOWED_MODELS:
         raise _CliInputError(f"model tag is not allowlisted: {model_tag!r}")
@@ -527,6 +785,225 @@ def _handle_run(arguments: argparse.Namespace) -> None:
     _emit(arguments, payload, human)
 
 
+def _build_pipeline_from(path: Path, *, confirm_cloud: bool) -> BuiltPipeline:
+    return build_pipeline(
+        load_pipeline_config(path),
+        adapter=create_adapter,
+        prompt=lambda name: get_active(_prompt_registry_root(), name),
+        confirm_cloud=confirm_cloud,
+    )
+
+
+def _build_and_run(
+    config_path: Path,
+    *,
+    data_root: Path,
+    manifest: Manifest,
+    split: Literal["dev", "final"],
+    run_id: str | None,
+    confirm_final: bool,
+    confirm_cloud: bool,
+) -> Path:
+    built = _build_pipeline_from(config_path, confirm_cloud=confirm_cloud)
+    return run_pipeline(
+        pipeline=built.pipeline,
+        data_root=data_root,
+        manifest=manifest,
+        split=split,
+        runs_root=config.runs_dir(),
+        run_id=run_id,
+        confirm_final_flag=confirm_final,
+        record=built.record,
+        cloud=built.cloud,
+    )
+
+
+def _short_error(error: BaseException) -> str:
+    """One line naming the failure; our engines never put sheet content in errors."""
+    message = " ".join(str(error).split())[:200]
+    return f"{type(error).__name__}: {message}" if message else type(error).__name__
+
+
+def _handle_extract(arguments: argparse.Namespace) -> int:
+    """Print the handover record for one sheet; exit 3 when it needs review.
+
+    This is the production path, so the record contains the sheet's values:
+    run it on the local PC only.
+    """
+    built = _build_pipeline_from(arguments.pipeline, confirm_cloud=bool(arguments.confirm_cloud))
+    try:
+        prepared = preprocess(arguments.image)
+    except PreprocessError as error:
+        raise _CliInputError(f"cannot read the sheet: {_short_error(error)}") from None
+    record = handover_record(
+        built.pipeline.extract(prepared), pipeline_id=built.pipeline.pipeline_id
+    )
+    compact = bool(getattr(arguments, "json", False))
+    print(
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            indent=None if compact else 2,
+            separators=(",", ":") if compact else None,
+        )
+    )
+    return 0 if record["ready"] else 3
+
+
+def _handle_doctor(arguments: argparse.Namespace) -> int:
+    """Check that every configured candidate can start, without reading any sheet."""
+    results: list[dict[str, Any]] = []
+    for path in cast(list[Path], arguments.pipelines):
+        entry: dict[str, Any] = {"config": str(path)}
+        try:
+            entry["pipeline_id"] = load_pipeline_config(path).pipeline_id
+            built = _build_pipeline_from(path, confirm_cloud=bool(arguments.confirm_cloud))
+            description = built.pipeline.describe()
+            missing = sorted(key for key, value in description.items() if value == "not installed")
+            entry["pipeline_id"] = built.pipeline.pipeline_id
+            entry["ok"] = not missing
+            if missing:
+                entry["problem"] = "not installed: " + ", ".join(missing)
+        except Exception as caught:
+            entry["ok"] = False
+            entry["problem"] = _short_error(caught)
+        results.append(entry)
+    lines = [
+        ("ready    " if item["ok"] else "PROBLEM  ")
+        + f"{item.get('pipeline_id', '?'):<10} {item['config']}"
+        + ("" if item["ok"] else f"\n         {item['problem']}")
+        for item in results
+    ]
+    n_ok = sum(item["ok"] for item in results)
+    lines.append(f"{n_ok} of {len(results)} candidates are ready.")
+    payload = {"candidates": results, "ready": n_ok, "total": len(results)}
+    _emit(arguments, payload, "\n".join(lines))
+    return 0 if n_ok == len(results) else 1
+
+
+def _run_id_for(prefix: str, pipeline_path: Path) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", pipeline_path.stem).strip("-") or "pipeline"
+    return _run_id(f"{prefix}-{stem}"[:64].rstrip("-"))
+
+
+def _handle_run_all(arguments: argparse.Namespace) -> int:
+    """Run every candidate on one split, continue past failures, then rank them."""
+    split = cast(Literal["dev", "final"], arguments.split)
+    if split == "final":
+        ensure_final_allowed(confirm_final_flag=bool(arguments.confirm_final))
+    data_root = resolve_split_dir(split)
+    manifest = load_manifest(data_root, ground_truth="edi_fields")
+    paths = cast(list[Path], arguments.pipelines)
+    if arguments.leaderboard_out is not None and arguments.leaderboard_out.exists():
+        raise _CliInputError("--leaderboard-out already exists; choose a new file before running")
+    run_ids = [_run_id_for(arguments.run_prefix, path) for path in paths]
+    if len(set(run_ids)) != len(run_ids):
+        raise _CliInputError("two pipeline files map to the same run ID; rename one")
+    done: list[tuple[Path, Path]] = []
+    failed: list[dict[str, str]] = []
+    for path, run_id in zip(paths, run_ids, strict=True):
+        print(f"Running {path} ...", file=sys.stderr, flush=True)
+        try:
+            run_dir = _build_and_run(
+                path,
+                data_root=data_root,
+                manifest=manifest,
+                split=split,
+                run_id=run_id,
+                confirm_final=bool(arguments.confirm_final),
+                confirm_cloud=bool(arguments.confirm_cloud),
+            )
+        except Exception as caught:
+            failed.append({"config": str(path), "error": _short_error(caught)})
+            continue
+        done.append((path, run_dir))
+    payload: dict[str, Any] = {
+        "failed": failed,
+        "runs": [{"config": str(path), "run_dir": str(run_dir)} for path, run_dir in done],
+        "split": split,
+    }
+    lines = [f"Finished {len(done)} of {len(paths)} candidates."]
+    lines.extend(f"FAILED {item['config']}: {item['error']}" for item in failed)
+    if len(done) >= 2:
+        board = build_leaderboard([load_pipeline_run(run_dir) for _, run_dir in done])
+        lines.append(render_leaderboard(board))
+        if arguments.leaderboard_out is not None:
+            payload["leaderboard"] = str(write_leaderboard(board, arguments.leaderboard_out))
+    _emit(arguments, payload, "\n".join(lines))
+    return 0 if not failed else 1
+
+
+def _handle_leaderboard(arguments: argparse.Namespace) -> None:
+    runs = [load_pipeline_run(path) for path in cast(list[Path], arguments.run_dirs)]
+    if runs and runs[0].manifest.split == "final":
+        ensure_final_allowed(confirm_final_flag=bool(arguments.confirm_final))
+    board = build_leaderboard(runs)
+    payload: dict[str, Any] = {
+        "entries": [
+            {
+                "field_accuracy": entry.summary.field_accuracy,
+                "pipeline_id": entry.pipeline_id,
+                "rank": entry.rank,
+                "run_id": entry.run_id,
+                "sheets_correct": entry.summary.sheets_correct,
+                "silent_errors": entry.summary.silent_errors,
+            }
+            for entry in board.entries
+        ],
+        "n_sheets": board.n_sheets,
+        "split": board.split,
+    }
+    if board.cloud_decision is not None:
+        payload["cloud_decision"] = board.cloud_decision.choice.value
+    if arguments.out is not None:
+        payload["out"] = str(write_leaderboard(board, arguments.out))
+    _emit(arguments, payload, render_leaderboard(board))
+
+
+def _handle_pipeline_run(arguments: argparse.Namespace) -> None:
+    if arguments.model is not None or arguments.prompt_name is not None:
+        raise _CliInputError("--pipeline cannot be combined with --model or --prompt-name")
+    split = cast(Split, arguments.split)
+    if split == "selection":
+        raise _CliInputError("ADR-0002 pipeline runs use only the dev and final splits")
+    if split == "final":
+        ensure_final_allowed(confirm_final_flag=bool(arguments.confirm_final))
+    data_root = resolve_split_dir(split)
+    manifest = load_manifest(data_root, ground_truth="edi_fields")
+    run_dir = _build_and_run(
+        arguments.pipeline,
+        data_root=data_root,
+        manifest=manifest,
+        split=split,
+        run_id=arguments.run_id,
+        confirm_final=bool(arguments.confirm_final),
+        confirm_cloud=bool(arguments.confirm_cloud),
+    )
+    results = load_pipeline_run(run_dir)
+    n_sheets = len(results.sheets)
+    if split == "dev":
+        summary = asdict(summarize(results.scores()))
+        payload: dict[str, Any] = {
+            "n_sheets": n_sheets,
+            "pipeline_id": results.manifest.pipeline_id,
+            "run_dir": str(run_dir),
+            "split": split,
+            "summary": summary,
+        }
+        human = f"Run directory: {run_dir}\n" + json.dumps(
+            summary, ensure_ascii=False, allow_nan=False, indent=2, sort_keys=True
+        )
+    else:
+        payload = {"n_sheets": n_sheets, "run_dir": str(run_dir), "split": split}
+        human = (
+            f"Completed {n_sheets} sheets. Run artifacts were written to the requested "
+            f"output directory.\nRun directory: {run_dir}"
+        )
+    _emit(arguments, payload, human)
+
+
 def _handle_smoke(arguments: argparse.Namespace) -> int:
     """Run one diagnostic OCR attempt without creating benchmark artifacts."""
     model_tag = cast(str, arguments.model)
@@ -560,7 +1037,16 @@ def _handle_smoke(arguments: argparse.Namespace) -> int:
 
 
 def _handle_report(arguments: argparse.Namespace) -> None:
-    if arguments.detail:
+    if is_pipeline_run(arguments.run_dir):
+        if arguments.detail:
+            split = load_pipeline_run(arguments.run_dir).manifest.split
+            ensure_detail_report_allowed(split)
+            output = write_pipeline_detail_report(arguments.run_dir, resolve_split_dir(split))
+            kind = "detail"
+        else:
+            output = write_pipeline_report(arguments.run_dir)
+            kind = "aggregate"
+    elif arguments.detail:
         results = load_run(arguments.run_dir)
         ensure_detail_report_allowed(results.manifest.split)
         data_root = resolve_split_dir(results.manifest.split)
@@ -573,6 +1059,14 @@ def _handle_report(arguments: argparse.Namespace) -> None:
 
 
 def _handle_export_summary(arguments: argparse.Namespace) -> None:
+    if is_pipeline_run(arguments.run_dir):
+        pipeline_results = load_pipeline_run(arguments.run_dir)
+        if pipeline_results.manifest.split != "dev":
+            raise _CliInputError("agent-facing summary export is restricted to Development runs")
+        output = write_pipeline_summary(arguments.run_dir, arguments.out)
+        payload = {"n_sheets": len(pipeline_results.sheets), "out": str(output), "split": "dev"}
+        _emit(arguments, payload, f"Wrote anonymous summary to {output}.")
+        return
     results = load_run(arguments.run_dir)
     if results.manifest.split != "dev":
         raise _CliInputError("agent-facing summary export is restricted to Development runs")
@@ -718,6 +1212,12 @@ def _handle_loop_record(arguments: argparse.Namespace) -> None:
 
 def _handle_compare_runs(arguments: argparse.Namespace) -> None:
     run_dirs = cast(list[Path], arguments.run_dirs)
+    pipeline_runs = [is_pipeline_run(path) for path in run_dirs]
+    if any(pipeline_runs):
+        if not all(pipeline_runs):
+            raise _CliInputError("ADR-0001 runs and ADR-0002 pipeline runs cannot be compared")
+        _compare_pipeline_runs(arguments, run_dirs)
+        return
     if len(run_dirs) not in (2, 3):
         raise _CliInputError("compare-runs requires exactly two or three run directories")
     results = [load_run(path) for path in run_dirs]
@@ -748,6 +1248,51 @@ def _handle_compare_runs(arguments: argparse.Namespace) -> None:
             f"identical prediction rate={summary.identical_prediction_rate:.6f}"
         )
     _emit(arguments, payload, human)
+
+
+def _compare_pipeline_runs(arguments: argparse.Namespace, run_dirs: Sequence[Path]) -> None:
+    """Paired comparison of two pipeline runs (B against A) and the cloud rule."""
+    if len(run_dirs) != 2:
+        raise _CliInputError("pipeline compare-runs requires exactly two run directories")
+    first, second = (load_pipeline_run(path) for path in run_dirs)
+    for field in ("split", "dataset_fingerprint", "order_no_rule"):
+        if getattr(first.manifest, field) != getattr(second.manifest, field):
+            raise _CliInputError(f"runs must share manifest field {field!r}")
+    if {sheet.sheet_id for sheet in first.sheets} != {sheet.sheet_id for sheet in second.sheets}:
+        raise _CliInputError("runs must contain the same sheet IDs")
+    if first.manifest.split == "final":
+        ensure_final_allowed(confirm_final_flag=bool(arguments.confirm_final))
+
+    comparison = compare(first.scores(), second.scores())
+    low, high = comparison.difference_ci
+    payload: dict[str, Any] = {
+        "kind": "field_comparison",
+        "pipeline_a": first.manifest.pipeline_id,
+        "pipeline_b": second.manifest.pipeline_id,
+        **asdict(comparison),
+    }
+    lines = [
+        f"Field comparison, B={second.manifest.pipeline_id} minus "
+        f"A={first.manifest.pipeline_id}: n={comparison.n_sheets}, "
+        f"difference={comparison.field_accuracy_difference:+.1%} "
+        f"(95% interval {low:+.1%} to {high:+.1%}), "
+        f"a_only={comparison.sheet_a_only}, b_only={comparison.sheet_b_only}, "
+        f"p={comparison.sheet_mcnemar_p_value:.6g}"
+    ]
+    if first.manifest.cloud != second.manifest.cloud:
+        local, cloud = (second, first) if first.manifest.cloud else (first, second)
+        decision = decide_cloud(local.scores(), cloud.scores())
+        payload["cloud_decision"] = {
+            "choice": decision.choice.value,
+            "cloud_pipeline": cloud.manifest.pipeline_id,
+            "local_pipeline": local.manifest.pipeline_id,
+            "margin": decision.margin,
+            "reasons": list(decision.reasons),
+        }
+        lines.append(
+            f"Cloud decision: {decision.choice.value} (" + "; ".join(decision.reasons) + ")"
+        )
+    _emit(arguments, payload, "\n".join(lines))
 
 
 def _prompt_registry_root() -> Path:
@@ -896,7 +1441,11 @@ def main(argv: list[str] | None = None) -> int:
         return error.status
     except (
         _CliInputError,
+        CloudNotAllowedError,
         ConfigError,
+        LeaderboardError,
+        PdfSplitError,
+        PipelineConfigError,
         DatasetError,
         PromptRegistryError,
         ResultsError,
