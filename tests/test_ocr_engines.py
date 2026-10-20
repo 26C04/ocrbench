@@ -12,8 +12,9 @@ import sys
 import types
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
@@ -30,6 +31,7 @@ from ocrbench.ocr_engines import (
     QwenVlTranscribeEngine,
     TesseractEngine,
     ensure_cloud_allowed,
+    remove_ruling_lines,
 )
 from ocrbench.ollama_adapter import FakeOllamaAdapter
 from ocrbench.preprocess import PreprocessResult
@@ -412,3 +414,41 @@ def test_real_tesseract_reads_a_part_number() -> None:
     result = TesseractEngine(languages="eng").transcribe(image)
 
     assert "HR237101021" in result.text
+
+
+def _ruled_png() -> bytes:
+    page = Image.new("L", (400, 200), 230)
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((20, 20, 380, 180), outline=0, width=3)
+    draw.line((20, 100, 380, 100), fill=0, width=3)
+    draw.line((200, 120, 230, 120), fill=0, width=4)  # a short stroke, like part of a glyph
+    output = io.BytesIO()
+    page.save(output, format="PNG")
+    return output.getvalue()
+
+
+def test_remove_ruling_lines_erases_long_lines_and_keeps_short_strokes() -> None:
+    with Image.open(io.BytesIO(remove_ruling_lines(_ruled_png()))) as cleaned:
+        assert cleaned.mode == "L"
+        pixel = cast(Callable[[tuple[int, int]], int], cleaned.getpixel)
+        assert pixel((300, 100)) > 200  # horizontal rule
+        assert pixel((21, 60)) > 200  # vertical rule
+        assert pixel((215, 120)) < 50  # short stroke stays
+    with pytest.raises(ValueError, match="min_run_px"):
+        remove_ruling_lines(_ruled_png(), min_run_px=1)
+
+
+def test_tesseract_remove_lines_option_changes_the_input_and_is_recorded(
+    tmp_path: Path,
+) -> None:
+    image = PreprocessResult(_ruled_png(), 400, 200, "image", 0.5, "v1")
+    runner = _FakeRunner(_done(b"text"), _done(b"tesseract 5.3.4\n"), _tessdata(tmp_path, "jpn"))
+    engine = TesseractEngine(languages="jpn", remove_lines=True, line_min_run_px=40, runner=runner)
+
+    engine.transcribe(image)
+
+    sent = runner.calls[0][1]["input"]
+    assert sent != image.png_bytes
+    assert sent == remove_ruling_lines(image.png_bytes, min_run_px=40)
+    assert engine.describe()["remove_lines"] == "min_run_px=40"
+    assert TesseractEngine(runner=_FakeRunner()).__dict__["_remove_lines"] is False

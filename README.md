@@ -169,6 +169,8 @@ uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
   cost) and no sheet data. `report --detail` (dev only) writes the local
   `report_detail.md` with values and OCR text; `export-summary` (dev only)
   writes the anonymous JSON that may be shared.
+- Before real sheets, run every candidate on synthetic sheets:
+  [`docs/synthetic-dry-run.md`](docs/synthetic-dry-run.md) (T25).
 - Existing ADR-0001 commands (`run --model --prompt-name`, `report`,
   `export-summary` and `compare-runs` on ADR-0001 runs) are unchanged.
 

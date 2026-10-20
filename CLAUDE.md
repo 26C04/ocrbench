@@ -96,8 +96,11 @@ Steps the script automates:
 - Steps 0–4, Step 5 part 1 (answers CSV import) and Step 5 part 2 (pipeline runner,
   `ocrbench run --pipeline`, `compare-runs` for pipeline runs) done in PR #23 (no reviews yet)
 - Step 5 part 3 done: `report.md`, `report --detail` and `export-summary` for pipeline runs
-- **Next: Step 5 part 4 / T25**, a synthetic dry run of every local candidate on the Windows
-  machine (`tasks/T25-synthetic-dry-run.md`)
+- Step 5 part 4 / T25 code done: synthetic sheet generator (`scripts/make_synthetic_sheets.py`),
+  Layer 2 prompt `edi-fields`, Tesseract `remove_lines` option (A1L), run steps in
+  `docs/synthetic-dry-run.md`
+- **Next: run the T25 dry run on the Windows machine** (A1, A1L, A2, A3, B; C when its command is
+  ready), then H6, the real benchmark on dev, then final
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
 - ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
 - Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)

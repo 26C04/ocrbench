@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from ocrbench.config import OcrBenchError
 from ocrbench.ocr_engines import (
+    DEFAULT_LINE_MIN_RUN_PX,
     DEFAULT_MISTRAL_USD_PER_PAGE,
     MistralOcrEngine,
     PaddleOcrEngine,
@@ -68,6 +69,8 @@ class TesseractConfig(_Strict):
     languages: str = "jpn+eng"
     psm: Annotated[int, Field(ge=0, le=13)] = 6
     timeout_s: Annotated[float, Field(gt=0)] = 120.0
+    remove_lines: bool = False
+    line_min_run_px: Annotated[int, Field(ge=2)] = DEFAULT_LINE_MIN_RUN_PX
 
 
 class PaddleOcrConfig(_Strict):
@@ -180,6 +183,8 @@ def _ocr_engine(
                 languages=config.languages,
                 page_segmentation_mode=config.psm,
                 timeout_s=config.timeout_s,
+                remove_lines=config.remove_lines,
+                line_min_run_px=config.line_min_run_px,
             )
         case PaddleOcrConfig():
             return PaddleOcrEngine(lang=config.lang, ocr_version=config.ocr_version)

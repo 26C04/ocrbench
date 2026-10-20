@@ -25,7 +25,7 @@ from pathlib import Path
 from time import perf_counter_ns
 from typing import Any, Final
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 
 from ocrbench import config
 from ocrbench.config import OcrBenchError
@@ -54,6 +54,56 @@ _TESSDATA_PATTERN = re.compile(r'"([^"]+)"')
 
 type Runner = Callable[..., subprocess.CompletedProcess[bytes]]
 
+DEFAULT_LINE_MIN_RUN_PX: Final[int] = 60
+_LINE_INK_THRESHOLD: Final[int] = 160
+
+
+def remove_ruling_lines(png_bytes: bytes, *, min_run_px: int = DEFAULT_LINE_MIN_RUN_PX) -> bytes:
+    """Erase table ruling lines so Tesseract can read text inside the cells.
+
+    Tesseract's layout analysis skips text enclosed by ruled boxes. A pixel
+    belongs to a line when it lies in a dark horizontal or vertical run of at
+    least ``min_run_px`` pixels; those pixels are filled with the local
+    background brightness. Glyph strokes are shorter than the run length, so
+    text is kept. Pillow only, no extra dependency; returns a grayscale PNG.
+    """
+    if min_run_px < 2:
+        raise ValueError("min_run_px must be at least 2")
+    with Image.open(io.BytesIO(png_bytes)) as source:
+        gray = source.convert("L")
+    width, height = gray.size
+    dark = gray.point(lambda value: 255 if value < _LINE_INK_THRESHOLD else 0)
+
+    def long_runs(horizontal: bool) -> Image.Image:
+        # Two grids, the second shifted by half a block, so line ends keep shorter stubs.
+        mask = Image.new("L", (width, height), 0)
+        for offset in (0, min_run_px // 2):
+            box = (offset, 0, width, height) if horizontal else (0, offset, width, height)
+            part = dark.crop(box)
+            size = (
+                (max(1, part.width // min_run_px), part.height)
+                if horizontal
+                else (part.width, max(1, part.height // min_run_px))
+            )
+            solid = part.resize(size, Image.Resampling.BOX).point(
+                lambda value: 255 if value >= 230 else 0
+            )
+            layer = Image.new("L", (width, height), 0)
+            layer.paste(solid.resize(part.size, Image.Resampling.NEAREST), box[:2])
+            mask = ImageChops.lighter(mask, layer)
+        return mask
+
+    horizontal = long_runs(True)
+    vertical = long_runs(False)
+    mask = ImageChops.lighter(horizontal, vertical).filter(ImageFilter.MaxFilter(3))
+    small = gray.resize((max(1, width // 8), max(1, height // 8)), Image.Resampling.BOX)
+    background = small.filter(ImageFilter.MaxFilter(5)).resize(
+        (width, height), Image.Resampling.BILINEAR
+    )
+    output = io.BytesIO()
+    Image.composite(background, gray, mask).save(output, format="PNG")
+    return output.getvalue()
+
 
 class TesseractEngine:
     """Candidate A1: the Tesseract command-line program (Japanese + English)."""
@@ -65,11 +115,15 @@ class TesseractEngine:
         languages: str = "jpn+eng",
         page_segmentation_mode: int = 6,
         timeout_s: float = 120.0,
+        remove_lines: bool = False,
+        line_min_run_px: int = DEFAULT_LINE_MIN_RUN_PX,
         runner: Runner = subprocess.run,
     ) -> None:
         self._executable = executable
         self._languages = languages
         self._psm = page_segmentation_mode
+        self._remove_lines = remove_lines
+        self._line_min_run_px = line_min_run_px
         self._timeout_s = timeout_s
         self._run = runner
         self._version: str | None = None
@@ -85,6 +139,9 @@ class TesseractEngine:
             "version": self.version(),
             "languages": self._languages,
             "psm": str(self._psm),
+            "remove_lines": (
+                f"min_run_px={self._line_min_run_px}" if self._remove_lines else "off"
+            ),
             **{f"data.{lang}": digest for lang, digest in self.language_data().items()},
         }
 
@@ -134,7 +191,12 @@ class TesseractEngine:
             "--psm",
             str(self._psm),
         ]
-        completed = self._invoke(command, image.png_bytes)
+        png = (
+            remove_ruling_lines(image.png_bytes, min_run_px=self._line_min_run_px)
+            if self._remove_lines
+            else image.png_bytes
+        )
+        completed = self._invoke(command, png)
         if completed.returncode != 0:
             raise OcrEngineError(f"tesseract exited with code {completed.returncode}")
         return OcrResult(
