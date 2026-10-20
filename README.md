@@ -186,6 +186,13 @@ uv run ocrbench compare-runs --run-dirs <A run dir> <B run dir>
   cost) and no sheet data. `report --detail` (dev only) writes the local
   `report_detail.md` with values and OCR text; `export-summary` (dev only)
   writes the anonymous JSON that may be shared.
+- `ocrbench doctor --pipelines <configs>` checks every candidate can start
+  (programs, Ollama models, prompts) without reading a sheet;
+  `ocrbench run-all` runs several configs and prints a leaderboard;
+  `ocrbench leaderboard --run-dirs <runs>` ranks existing runs.
+- `ocrbench dataset answers-from-pdf` writes the answers CSV from a digital
+  PDF, named after the scans or photos of its printed pages. Full steps for
+  Kimura's sheets: [`docs/kimura-benchmark-run.md`](docs/kimura-benchmark-run.md).
 - Before real sheets, run every candidate on synthetic sheets:
   [`docs/synthetic-dry-run.md`](docs/synthetic-dry-run.md) (T25).
 - Existing ADR-0001 commands (`run --model --prompt-name`, `report`,

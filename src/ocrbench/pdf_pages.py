@@ -8,12 +8,15 @@ PDF keeps its text layer for the ``pdf_text`` engine.
 from __future__ import annotations
 
 import csv
+import random
+from dataclasses import dataclass
 from pathlib import Path
 
 import pypdfium2 as pdfium  # type: ignore[import-untyped]
 
 from ocrbench.config import OcrBenchError
 from ocrbench.edi_answers import ANSWER_COLUMNS
+from ocrbench.label_rules import extract_fields
 
 
 class PdfSplitError(OcrBenchError):
@@ -70,4 +73,100 @@ def write_answers_template(paths: list[Path], template: Path) -> None:
             writer.writerow([path.name, *([""] * (len(ANSWER_COLUMNS) - 1))])
 
 
-__all__ = ["PdfSplitError", "split_pdf", "write_answers_template"]
+@dataclass(frozen=True)
+class PdfAnswers:
+    """Answer rows read from a digital PDF, and the pages a person must still fill in."""
+
+    rows: list[list[str]]
+    incomplete_pages: list[int]
+
+
+def answers_from_pdf(
+    pdf_path: Path,
+    *,
+    file_pattern: str,
+    source_kind: str,
+    final_share: float,
+    seed: int,
+) -> PdfAnswers:
+    """Build answers-CSV rows from a digital PDF's text layer, one row per page.
+
+    ``file_pattern`` names each page's image, e.g. ``scan-{page:03d}.jpg``
+    (pages count from 1), so the rows can describe scans or photos of the
+    printed sheets. Fields are read with :func:`ocrbench.label_rules.extract_fields`;
+    a field it cannot read with certainty is left blank, and ``import-answers``
+    then refuses the file until a person fills it in. ``final_share`` of the
+    pages, chosen with a seeded shuffle, go to the final split.
+    """
+    if source_kind not in ("scan", "photo"):
+        raise PdfSplitError("source kind must be 'scan' or 'photo'")
+    if not 0.0 <= final_share < 1.0:
+        raise PdfSplitError("final share must be at least 0 and below 1")
+    try:
+        file_pattern.format(page=1)
+    except KeyError, IndexError, ValueError:
+        raise PdfSplitError("file pattern must use {page}, e.g. scan-{page:03d}.jpg") from None
+    try:
+        document = pdfium.PdfDocument(pdf_path)
+    except Exception as error:
+        raise PdfSplitError(f"cannot open the PDF: {type(error).__name__}") from None
+    try:
+        texts = []
+        for index in range(len(document)):
+            page = document[index]
+            try:
+                text_page = page.get_textpage()
+                try:
+                    texts.append(text_page.get_text_range())
+                finally:
+                    text_page.close()
+            finally:
+                page.close()
+    finally:
+        document.close()
+    if not texts:
+        raise PdfSplitError("the PDF has no pages")
+    if not any(text.strip() for text in texts):
+        raise PdfSplitError("the PDF has no text layer (is it a scan?)")
+
+    order = list(range(len(texts)))
+    random.Random(seed).shuffle(order)
+    final_pages = set(order[: round(len(texts) * final_share)])
+    names = [file_pattern.format(page=index + 1) for index in range(len(texts))]
+    if len(set(names)) != len(names):
+        raise PdfSplitError("file pattern gives two pages the same name; use {page}")
+
+    rows: list[list[str]] = []
+    incomplete: list[int] = []
+    for index, text in enumerate(texts):
+        fields = extract_fields(text)
+        values = [fields.customer, fields.part_no, fields.order_no, fields.quantity]
+        if any(value is None for value in values):
+            incomplete.append(index + 1)
+        rows.append(
+            [
+                names[index],
+                source_kind,
+                "final" if index in final_pages else "dev",
+                *("" if value is None else str(value) for value in values),
+            ]
+        )
+    return PdfAnswers(rows, incomplete)
+
+
+def write_answers(answers: PdfAnswers, out: Path) -> None:
+    """Write the rows as an answers CSV, refusing to overwrite an existing file."""
+    with out.open("x", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(ANSWER_COLUMNS)
+        writer.writerows(answers.rows)
+
+
+__all__ = [
+    "PdfAnswers",
+    "PdfSplitError",
+    "answers_from_pdf",
+    "split_pdf",
+    "write_answers",
+    "write_answers_template",
+]

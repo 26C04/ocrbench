@@ -107,8 +107,11 @@ Steps the script automates:
 - Confirmed 20 Oct: sheets reach the shipping desk **only on paper**; data reaches customers only via
   their EDI websites. OCR on paper is the real path. The PDF text layer (A0R) is used as an exact
   answer key: ask Kimura for the PDF of every sheet they scan or photograph for us
-- **Next:** run the LLM candidates (A1L, A2, A3, B) on the Windows machine; get real scans and phone
-  photos of the 51 sample sheets; group decides D2 (customer matching)
+- Added `doctor`, `run-all`, `leaderboard`, `dataset answers-from-pdf` (answer key from the PDF,
+  matched to scans/photos by page number)
+- **Next:** on the Windows machine follow `docs/kimura-benchmark-run.md`: scan and photograph the
+  51 printed sheets, build the answer key from the PDF, run A1L, A2, A3, B, A1R on dev;
+  group decides D2 (customer matching)
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
 - ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
 - Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)

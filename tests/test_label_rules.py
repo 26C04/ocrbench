@@ -256,3 +256,77 @@ def test_cli_end_to_end_on_a_split_digital_pdf(
     assert "| Field accuracy | 100.0% (12/12 fields;" in (run_dir / "report.md").read_text(
         encoding="utf-8"
     )
+
+
+def test_answers_from_pdf_builds_an_importable_answer_key(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from ocrbench.pdf_pages import answers_from_pdf
+    from tests.helpers import make_pdf_bytes
+
+    pages = [_sheet_lines(f"HR90000000{i}", f"90000{i}-2026", f"{i}PC") for i in range(1, 6)]
+    source = tmp_path / "printed.pdf"
+    source.write_bytes(make_text_pdf_bytes(pages))
+    out = tmp_path / "answers.csv"
+
+    assert (
+        main(
+            [
+                "dataset",
+                "answers-from-pdf",
+                "--pdf",
+                str(source),
+                "--out",
+                str(out),
+                "--file-pattern",
+                "scan-{page:02d}.jpg",
+                "--final-share",
+                "0.6",
+            ]
+        )
+        == 0
+    )
+    assert "Wrote 5 answer rows (2 dev, 3 final)" in capsys.readouterr().out
+    rows = list(csv.DictReader(out.open(encoding="utf-8")))
+    assert [row["file"] for row in rows] == [f"scan-{i:02d}.jpg" for i in range(1, 6)]
+    assert rows[0]["part_no"] == "HR900000001" and rows[0]["quantity"] == "1"
+    assert rows[0]["customer"] == "Nidecマシンツール株式会社"
+    assert main(["dataset", "answers-from-pdf", "--pdf", str(source), "--out", str(out)]) == 2
+    capsys.readouterr()
+
+    again = answers_from_pdf(
+        source, file_pattern="p{page}.png", source_kind="photo", final_share=0.6, seed=1
+    )
+    same = answers_from_pdf(
+        source, file_pattern="p{page}.png", source_kind="photo", final_share=0.6, seed=1
+    )
+    assert [row[2] for row in again.rows] == [row[2] for row in same.rows]
+    assert {row[1] for row in again.rows} == {"photo"}
+
+    # A page whose quantity cannot be read is left blank and reported.
+    partial = tmp_path / "partial.pdf"
+    partial.write_bytes(make_text_pdf_bytes([pages[0], ["部番 HR900000009"]]))
+    out2 = tmp_path / "partial.csv"
+    assert main(["dataset", "answers-from-pdf", "--pdf", str(partial), "--out", str(out2)]) == 1
+    assert "pages: 2" in capsys.readouterr().out
+    assert list(csv.reader(out2.open(encoding="utf-8")))[2][3:] == ["", "HR900000009", "", ""]
+
+    blank = tmp_path / "scan.pdf"
+    blank.write_bytes(make_pdf_bytes(2))
+    for kwargs, message in (
+        ({"pdf_path": blank}, "no text layer"),
+        ({"pdf_path": source, "file_pattern": "same.png"}, "same name"),
+        ({"pdf_path": source, "file_pattern": "{nope}.png"}, "must use {page}"),
+        ({"pdf_path": source, "final_share": 1.0}, "final share"),
+        ({"pdf_path": source, "source_kind": "fax"}, "source kind"),
+        ({"pdf_path": tmp_path / "missing.pdf"}, "cannot open"),
+    ):
+        options = {
+            "file_pattern": "p{page}.png",
+            "source_kind": "scan",
+            "final_share": 0.5,
+            "seed": 1,
+            **kwargs,
+        }
+        with pytest.raises(PdfSplitError, match=message):
+            answers_from_pdf(**options)  # type: ignore[arg-type]
