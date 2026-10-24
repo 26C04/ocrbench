@@ -6,15 +6,22 @@ approved models with the shared `base` prompt (ADR §8-1, §8-2). It builds on
 [windows-setup.md](windows-setup.md); follow that guide for anything not
 repeated here.
 
-## Before the session (downloads take the longest)
+## Set up the PC (downloads take the longest)
 
-1. Install Git, uv and Ollama, then pull the five approved models
-   ([windows-setup.md](windows-setup.md) §2–4). Leave the PC on while they
-   download.
-2. Clone the repository and run `uv sync` and `uv run pytest`.
-3. Create `D:\OCRBench\data\raw`, `D:\OCRBench\runs` and
-   `D:\OCRBench\samples`, then `setx OCRBENCH_DATA_DIR` and
-   `setx OCRBENCH_RUNS_DIR` (§5).
+1. Install Git (`winget install --id=Git.Git -e`), open a new PowerShell
+   and clone the repository.
+2. From the repository root, run:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\setup_windows.ps1
+   ```
+
+   It installs uv and Ollama if missing, runs `uv sync` and the tests,
+   creates `D:\OCRBench\data\raw`, `D:\OCRBench\runs` and
+   `D:\OCRBench\samples`, sets `OCRBENCH_DATA_DIR` and `OCRBENCH_RUNS_DIR`,
+   and pulls the five approved models ([windows-setup.md](windows-setup.md)
+   §2–5). Use `-BaseDir` for a drive other than `D:`. The model downloads
+   take the longest; digitize documents and enter ground truth meanwhile.
 
 ## Digitize the Development documents
 
