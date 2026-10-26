@@ -83,6 +83,35 @@ uv run ocrbench run-all --split dev --run-prefix dev1 --leaderboard-out D:\ocrbe
 - For one run in detail: `uv run ocrbench report --run-dir <run>` (scan and
   photo accuracy are shown separately).
 
+## 4b. Candidate C: the template harness
+
+C runs the teammate's `automation-harness` checkout, cloned beside this
+repository (or set `OCRBENCH_HARNESS_DIR`). On the reference PC, Windows App
+Control blocks the unsigned Python 3.12 that uv downloads for the harness, so
+use the PC's installed Python 3.14 instead (the harness accepts 3.11 or newer;
+its OCR tests pass on 3.14). Never switch App Control off; if a package is
+still blocked, ask IT for an approval.
+
+```powershell
+$env:UV_PYTHON = "3.14"            # this window only
+cd $HOME\automation-harness
+uv sync
+cd $HOME\ocrbench
+uv run ocrbench run-all --split dev --run-prefix dev4 --leaderboard-out D:\ocrbench-runs\leaderboard-dev4-C.md --pipelines pipelines\C-harness.json
+```
+
+`doctor` cannot check an external program, so check one sheet first:
+`uv run python -m scripts.harness_candidate <one dev image>` must print a
+status, and on failure prints the harness's own error line.
+
+C's customer is scored by the EDI site the harness chose (its loose match,
+the D2 recommendation). To see what that rule would do to every candidate
+without changing the official scores:
+
+```powershell
+uv run python -m scripts.customer_rule_preview --run-dirs <dev run dirs>
+```
+
 ## 5. Final, once
 
 After tuning on dev, tag the code and record the configs (freeze rule), then:
