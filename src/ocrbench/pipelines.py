@@ -123,7 +123,17 @@ def _status_for(fields: EdiFields) -> PipelineStatus:
 
 
 def _error_name(error: BaseException) -> str:
-    return type(error).__name__
+    """Name the failure; for an Ollama refusal also its HTTP status and server message.
+
+    Ollama's messages describe the server (memory, context, a crashed runner),
+    never the sheet, so they are kept, cut to 160 characters.
+    """
+    name = type(error).__name__
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int):
+        message = " ".join(str(getattr(error, "error", error)).split())[:160]
+        return f"{name} {status}: {message}"
+    return name
 
 
 class OcrLlmPipeline:

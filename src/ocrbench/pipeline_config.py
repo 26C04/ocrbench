@@ -99,6 +99,8 @@ class PaddleOcrConfig(_Strict):
 class QwenVlConfig(_Strict):
     engine: Literal["qwen_vl"]
     model: str = "qwen2.5vl:7b"
+    max_side: Annotated[int, Field(ge=448, le=8192)] | None = None
+    num_ctx: Annotated[int, Field(ge=2048, le=131072)] | None = None
 
 
 class MistralConfig(_Strict):
@@ -219,7 +221,12 @@ def _ocr_engine(
         case PaddleOcrConfig():
             return PaddleOcrEngine(lang=config.lang, ocr_version=config.ocr_version)
         case QwenVlConfig():
-            return QwenVlTranscribeEngine(adapter=adapter(), model=config.model)
+            return QwenVlTranscribeEngine(
+                adapter=adapter(),
+                model=config.model,
+                max_side=config.max_side,
+                num_ctx=config.num_ctx,
+            )
         case MistralConfig():
             return MistralOcrEngine(
                 confirmed=confirm_cloud, model=config.model, usd_per_page=config.usd_per_page

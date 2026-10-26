@@ -236,6 +236,25 @@ _TRANSCRIBE_SCHEMA: Final[dict[str, Any]] = {
 }
 
 
+def fit_long_side(png_bytes: bytes, max_side: int | None) -> bytes:
+    """Shrink a PNG so its longer side is at most ``max_side`` pixels; smaller images pass as is.
+
+    A vision model turns every 28 x 28 pixel patch into a token, so a full camera
+    photo can outgrow the model's context or the GPU before the prompt is read.
+    """
+    if max_side is None:
+        return png_bytes
+    with Image.open(io.BytesIO(png_bytes)) as source:
+        if max(source.size) <= max_side:
+            return png_bytes
+        scale = max_side / max(source.size)
+        size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
+        resized = source.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    resized.save(out, format="PNG")
+    return out.getvalue()
+
+
 class QwenVlTranscribeEngine:
     """Candidate A3: a vision model used only to transcribe text, via Ollama."""
 
@@ -246,11 +265,15 @@ class QwenVlTranscribeEngine:
         model: str = "qwen2.5vl:7b",
         prompt: str = TRANSCRIBE_PROMPT,
         seed: int = config.SEED,
+        max_side: int | None = None,
+        num_ctx: int | None = None,
     ) -> None:
         self._adapter = adapter
         self._model = model
         self._prompt = prompt
         self._seed = seed
+        self._max_side = max_side
+        self._num_ctx = num_ctx
         self._digest: str | None = None
 
     @property
@@ -265,6 +288,8 @@ class QwenVlTranscribeEngine:
             "model": self._model,
             "digest": self._digest,
             "seed": str(self._seed),
+            "max_side": "original" if self._max_side is None else str(self._max_side),
+            "num_ctx": "default" if self._num_ctx is None else str(self._num_ctx),
         }
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
@@ -272,10 +297,11 @@ class QwenVlTranscribeEngine:
         chat = self._adapter.generate_structured(
             model=self._model,
             prompt=self._prompt,
-            image_png=image.png_bytes,
+            image_png=fit_long_side(image.png_bytes, self._max_side),
             format_schema=dict(_TRANSCRIBE_SCHEMA),
             seed=self._seed,
             temperature=0.0,
+            num_ctx=self._num_ctx,
         )
         try:
             decoded = json.loads(chat.content)

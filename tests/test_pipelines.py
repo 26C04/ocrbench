@@ -6,6 +6,7 @@ import json
 import sys
 from pathlib import Path
 
+import ollama
 import pytest
 
 from ocrbench import config
@@ -140,6 +141,28 @@ def test_ocr_llm_layer1_error_does_not_leak_message() -> None:
     assert result.error == "layer 1 failed: RuntimeError"
     assert result.attempts == 0
     assert result.cost_usd == 0.0
+
+
+class _RefusedOcr:
+    engine_id = "refused"
+
+    def describe(self) -> dict[str, str]:
+        return {"name": "refused"}
+
+    def transcribe(self, image: PreprocessResult) -> OcrResult:
+        raise ollama.ResponseError("model runner has unexpectedly stopped", 500)
+
+
+def test_ocr_llm_layer1_ollama_refusal_keeps_status_and_server_message() -> None:
+    pipeline = OcrLlmPipeline(
+        pipeline_id="A3", ocr=_RefusedOcr(), llm=FakeOllamaAdapter(), model="m", instructions="i"
+    )
+
+    result = pipeline.extract(IMAGE)
+
+    assert result.error == (
+        "layer 1 failed: ResponseError 500: model runner has unexpectedly stopped"
+    )
 
 
 class _BilledOcr(_BrokenOcr):

@@ -31,6 +31,7 @@ from ocrbench.ocr_engines import (
     QwenVlTranscribeEngine,
     TesseractEngine,
     ensure_cloud_allowed,
+    fit_long_side,
     remove_ruling_lines,
 )
 from ocrbench.ollama_adapter import FakeOllamaAdapter
@@ -175,8 +176,36 @@ def test_qwen_vl_transcribes_with_fixed_prompt_and_seed() -> None:
         "model": "qwen2.5vl:7b",
         "digest": "sha256:fake",
         "seed": str(config.SEED),
+        "max_side": "original",
+        "num_ctx": "default",
     }
     assert engine.engine_id == "qwen-vl"
+    assert adapter.num_ctx_calls == [None]
+
+
+def test_qwen_vl_shrinks_large_images_and_sets_the_context() -> None:
+    big = Image.new("RGB", (3000, 2000), "white")
+    buffer = io.BytesIO()
+    big.save(buffer, format="PNG")
+    page = PreprocessResult(
+        png_bytes=buffer.getvalue(),
+        width=3000,
+        height=2000,
+        source_kind="image",
+        duration_ms=0.0,
+        version="v1",
+    )
+    adapter = FakeOllamaAdapter([json.dumps({"text": "t"})])
+    engine = QwenVlTranscribeEngine(adapter=adapter, max_side=1500, num_ctx=12288)
+
+    engine.transcribe(page)
+
+    assert adapter.num_ctx_calls == [12288]
+    assert engine.describe()["max_side"] == "1500"
+    with Image.open(io.BytesIO(fit_long_side(page.png_bytes, 1500))) as shrunk:
+        assert shrunk.size == (1500, 1000)
+    assert fit_long_side(page.png_bytes, 4000) == page.png_bytes
+    assert fit_long_side(page.png_bytes, None) == page.png_bytes
 
 
 @pytest.mark.parametrize("content", ["not json", "[]", '{"text": 1}', '{"text": "a", "extra": 1}'])

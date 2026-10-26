@@ -64,8 +64,12 @@ class OllamaAdapter(Protocol):
         format_schema: dict[str, Any],
         seed: int,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
     ) -> ChatResult:
-        """Generate one structured response without retries."""
+        """Generate one structured response without retries.
+
+        ``num_ctx`` overrides the model's context window; ``None`` keeps Ollama's default.
+        """
 
     def resolve_digest(self, model: str) -> str:
         """Resolve an exact model tag to its immutable digest."""
@@ -113,6 +117,7 @@ class RealOllamaAdapter:
         format_schema: dict[str, Any],
         seed: int,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
     ) -> ChatResult:
         """Issue exactly one chat call and preserve the model's raw text output."""
         return self._chat(
@@ -121,6 +126,7 @@ class RealOllamaAdapter:
             format_schema=format_schema,
             seed=seed,
             temperature=temperature,
+            num_ctx=num_ctx,
         )
 
     def generate_structured_text(
@@ -149,12 +155,16 @@ class RealOllamaAdapter:
         format_schema: dict[str, Any],
         seed: int,
         temperature: float,
+        num_ctx: int | None = None,
     ) -> ChatResult:
+        options: dict[str, Any] = {"temperature": temperature, "seed": seed}
+        if num_ctx is not None:
+            options["num_ctx"] = num_ctx
         response = self._client.chat(
             model=model,
             messages=[message],
             format=format_schema,
-            options={"temperature": temperature, "seed": seed},
+            options=options,
             think=False,
             stream=False,
             keep_alive=OLLAMA_KEEP_ALIVE,
@@ -235,6 +245,7 @@ class FakeOllamaAdapter:
         self._digest = digest
         self._fully_on_gpu = fully_on_gpu
         self.calls: list[FakeCall] = []
+        self.num_ctx_calls: list[int | None] = []
 
     @classmethod
     def always(cls, json_text: str) -> FakeOllamaAdapter:
@@ -252,8 +263,10 @@ class FakeOllamaAdapter:
         format_schema: dict[str, Any],
         seed: int,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
     ) -> ChatResult:
         """Record one call and return the next deterministic fake result."""
+        self.num_ctx_calls.append(num_ctx)
         return self._respond(model, prompt, format_schema, seed, temperature, len(image_png))
 
     def generate_structured_text(

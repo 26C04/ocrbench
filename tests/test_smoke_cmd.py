@@ -53,6 +53,7 @@ class _SmokeAdapter:
         format_schema: dict[str, Any],
         seed: int,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
     ) -> ChatResult:
         self.calls.append(
             {

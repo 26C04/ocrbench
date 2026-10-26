@@ -64,6 +64,7 @@ class RecordingAdapter:
         format_schema: dict[str, Any],
         seed: int,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
     ) -> ChatResult:
         index = len(self.calls)
         self.calls.append(

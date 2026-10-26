@@ -37,6 +37,7 @@ class _NeverCalledAdapter:
         format_schema: dict[str, Any],
         seed: int,
         temperature: float = 0.0,
+        num_ctx: int | None = None,
     ) -> ChatResult:
         raise AssertionError("inference must not run before the Final gate")
 
