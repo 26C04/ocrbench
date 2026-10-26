@@ -55,6 +55,12 @@ def _printed_customer(slip: dict[str, Any]) -> str | None:
     return None
 
 
+def _last_error_line(stderr: bytes) -> str:
+    """Return the harness's last error line, cut short; ocrbench never stores stderr."""
+    lines = [line.strip() for line in stderr.decode("utf-8", "replace").splitlines()]
+    return next((line[:200] for line in reversed(lines) if line), "(no message)")
+
+
 def convert(report: dict[str, Any], customer_mode: CustomerMode = "site") -> dict[str, Any]:
     """Map one harness report for a single image onto the ocrbench output contract."""
     slips: list[dict[str, Any]] = report.get("slips", [])
@@ -104,6 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed = subprocess.run(command, cwd=harness, capture_output=True, check=False)
         if completed.returncode not in (0, _REVIEW_EXIT_CODE) or not out.is_file():
             print(f"error: harness exited with code {completed.returncode}", file=sys.stderr)
+            print(_last_error_line(completed.stderr), file=sys.stderr)
             return 1
         report = json.loads(out.read_text(encoding="utf-8"))
 
