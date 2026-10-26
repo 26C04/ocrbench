@@ -353,6 +353,10 @@ def test_config_kinds_parse_and_build() -> None:
     assert build_pipeline(vision, adapter=lambda: adapter, prompt=_prompt).record[
         "vision_digest"
     ] == ("sha256:layer2")
+    assert vision.output == "order_document"
+    edi_vision = parse_pipeline_config(Path("pipelines/B-vision.json").read_text(encoding="utf-8"))
+    assert isinstance(edi_vision, VisionConfig)
+    assert (edi_vision.output, edi_vision.prompt_name) == ("edi_fields", "edi-fields-vision")
 
     def no_adapter() -> FakeOllamaAdapter:
         raise AssertionError("an external command must not need Ollama")

@@ -2,5 +2,6 @@
   "kind": "vision",
   "pipeline_id": "B",
   "model": "gemma4:12b",
-  "prompt_name": "base"
+  "prompt_name": "edi-fields-vision",
+  "output": "edi_fields"
 }

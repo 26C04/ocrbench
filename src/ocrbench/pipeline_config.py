@@ -8,7 +8,8 @@ freeze rule). Examples::
      "ocr": {"engine": "tesseract", "languages": "jpn+eng", "psm": 6},
      "llm_model": "qwen3:8b", "prompt_name": "edi-fields"}
 
-    {"kind": "vision", "pipeline_id": "B", "model": "gemma4:12b", "prompt_name": "base"}
+    {"kind": "vision", "pipeline_id": "B", "model": "gemma4:12b",
+     "prompt_name": "edi-fields-vision", "output": "edi_fields"}
 
     {"kind": "external", "pipeline_id": "C", "command": ["python", "harness.py"],
      "timeout_s": 120, "version": "1.0"}
@@ -143,6 +144,7 @@ class VisionConfig(_PipelineBase):
     kind: Literal["vision"]
     model: Annotated[str, Field(min_length=1)]
     prompt_name: Annotated[str, Field(min_length=1)]
+    output: Literal["order_document", "edi_fields"] = "order_document"
 
 
 class ExternalConfig(_PipelineBase):
@@ -277,6 +279,7 @@ def build_pipeline(
                 adapter=ollama,
                 model=config.model,
                 prompt=vision_prompt.text,
+                output=config.output,
             )
             record = {
                 **_prompt_record(vision_prompt),

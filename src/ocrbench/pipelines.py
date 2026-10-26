@@ -31,6 +31,9 @@ _TEMPERATURE: Final[float] = 0.0
 _RETRY_STATUSES: Final[frozenset[ParseStatus]] = frozenset(
     {ParseStatus.NOT_JSON, ParseStatus.SCHEMA_VIOLATION}
 )
+type VisionOutput = Literal["order_document", "edi_fields"]
+"""What a vision model is asked for: the ADR-0001 order document or the 4 EDI fields."""
+
 OCR_TEXT_HEADER: Final[str] = "--- OCR text ---"
 """Line separating the Layer 2 instructions from the Layer 1 text."""
 
@@ -245,12 +248,14 @@ class VisionPipeline:
         adapter: OllamaAdapter,
         model: str,
         prompt: str,
+        output: VisionOutput = "order_document",
         seed: int = config.SEED,
     ) -> None:
         self._pipeline_id = pipeline_id
         self._adapter = adapter
         self._model = model
         self._prompt = prompt
+        self._output: VisionOutput = output
         self._seed = seed
 
     @property
@@ -262,10 +267,13 @@ class VisionPipeline:
             "kind": "vision",
             "pipeline_id": self._pipeline_id,
             "vision_model": self._model,
+            "output": self._output,
             "seed": str(self._seed),
         }
 
     def extract(self, image: PreprocessResult) -> PipelineResult:
+        if self._output == "edi_fields":
+            return self._extract_edi_fields(image)
         started = perf_counter_ns()
         schema = ollama_format_schema()
         raw_outputs: list[str] = []
@@ -297,6 +305,52 @@ class VisionPipeline:
             status = PipelineStatus.FORMAT_ERROR
         else:
             fields, status = order_document_to_edi(document)
+        elapsed = elapsed_ms(started)
+        return PipelineResult(
+            status=status,
+            fields=fields,
+            layer1_text=None,
+            layer1_ms=None,
+            layer2_ms=elapsed,
+            total_ms=elapsed,
+            cost_usd=0.0,
+            attempts=len(raw_outputs) + (1 if error is not None else 0),
+            raw_outputs=tuple(raw_outputs),
+            error=error,
+        )
+
+    def _extract_edi_fields(self, image: PreprocessResult) -> PipelineResult:
+        """Ask for the 4 EDI fields directly, with the same schema as Layer 2."""
+        started = perf_counter_ns()
+        schema = edi_format_schema()
+        raw_outputs: list[str] = []
+        error: str | None = None
+        fields: EdiFields | None = None
+        for _attempt in range(2):
+            try:
+                chat = self._adapter.generate_structured(
+                    model=self._model,
+                    prompt=self._prompt,
+                    image_png=image.png_bytes,
+                    format_schema=copy.deepcopy(schema),
+                    seed=self._seed,
+                    temperature=_TEMPERATURE,
+                )
+            except Exception as caught:
+                error = f"vision model failed: {_error_name(caught)}"
+                break
+            raw_outputs.append(chat.content)
+            parsed = parse_edi_output(chat.content)
+            if parsed.status not in _RETRY_STATUSES:
+                fields = parsed.fields
+                break
+
+        if error is not None:
+            status = PipelineStatus.ERROR
+        elif fields is None:
+            status = PipelineStatus.FORMAT_ERROR
+        else:
+            status = _status_for(fields)
         elapsed = elapsed_ms(started)
         return PipelineResult(
             status=status,

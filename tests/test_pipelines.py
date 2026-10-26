@@ -247,6 +247,49 @@ def test_vision_pipeline_format_error_and_adapter_error() -> None:
     assert result.error == "vision model failed: AssertionError"
 
 
+def test_vision_pipeline_edi_fields_output_reads_the_4_fields_directly() -> None:
+    adapter = FakeOllamaAdapter(["oops", json.dumps(FULL)])
+    pipeline = VisionPipeline(
+        pipeline_id="B", adapter=adapter, model="gemma4:12b", prompt="p", output="edi_fields"
+    )
+
+    result = pipeline.extract(IMAGE)
+
+    assert result.status is PipelineStatus.OK
+    assert result.fields == EdiFields.model_validate(FULL)
+    assert result.attempts == 2
+    assert adapter.calls[0].schema == edi_format_schema()
+    assert describe_pipeline(pipeline)["output"] == "edi_fields"
+
+
+def test_vision_pipeline_edi_fields_output_flags_missing_and_failures() -> None:
+    partial = {**FULL, "quantity": None}
+    flagged = VisionPipeline(
+        pipeline_id="B",
+        adapter=FakeOllamaAdapter([json.dumps(partial)]),
+        model="m",
+        prompt="p",
+        output="edi_fields",
+    ).extract(IMAGE)
+    assert flagged.status is PipelineStatus.NEEDS_REVIEW
+    assert flagged.fields is not None and flagged.fields.quantity is None
+
+    bad = VisionPipeline(
+        pipeline_id="B",
+        adapter=FakeOllamaAdapter(["x", "y"]),
+        model="m",
+        prompt="p",
+        output="edi_fields",
+    )
+    assert bad.extract(IMAGE).status is PipelineStatus.FORMAT_ERROR
+
+    broken = VisionPipeline(
+        pipeline_id="B", adapter=FakeOllamaAdapter([]), model="m", prompt="p", output="edi_fields"
+    ).extract(IMAGE)
+    assert broken.status is PipelineStatus.ERROR
+    assert broken.error == "vision model failed: AssertionError"
+
+
 def _script(tmp_path: Path, body: str) -> list[str]:
     script = tmp_path / "harness.py"
     script.write_text(body, encoding="utf-8")
