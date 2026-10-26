@@ -1,0 +1,7 @@
+{
+  "kind": "external",
+  "pipeline_id": "C",
+  "command": ["uv", "run", "python", "-m", "scripts.harness_candidate"],
+  "timeout_s": 300,
+  "version": "automation-harness 59c51a3"
+}
