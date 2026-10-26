@@ -1,0 +1,6 @@
+{
+  "kind": "ocr_rules",
+  "pipeline_id": "A3R",
+  "ocr": {"engine": "qwen_vl", "model": "qwen2.5vl:7b", "max_side": 2048, "num_ctx": 12288},
+  "snap_customer": true
+}

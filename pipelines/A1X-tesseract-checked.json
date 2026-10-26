@@ -1,0 +1,9 @@
+{
+  "kind": "ocr_llm",
+  "pipeline_id": "A1X",
+  "ocr": {"engine": "tesseract", "languages": "jpn+eng", "psm": 6},
+  "llm_model": "qwen3:8b",
+  "prompt_name": "edi-fields",
+  "snap_customer": true,
+  "rules_check": true
+}

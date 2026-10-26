@@ -19,49 +19,17 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from ocrbench.config import OcrBenchError
-from ocrbench.customers import CUSTOMER_SITES, resolve_customer_site
+from ocrbench.customers import canonical_name, loose_site, resolve_customer_site
 from ocrbench.edi_fields import EdiFields, compare_fields, format_problems
 from ocrbench.pipeline_results import load_pipeline_run
 from ocrbench.pipeline_runner import load_edi_ground_truth
 from ocrbench.pipelines import PipelineStatus
-
-LOOSE_CUTOFF = 0.65
-LOOSE_MARGIN = 0.1
-_LEGAL_FORMS = re.compile(
-    r"(株式会社|有限会社|\(株\)|\(有\)|CO\.,?\s*LTD\.?|INC\.?)", re.IGNORECASE
-)
-_SEPARATORS = re.compile(r"[\s・.,]")
-
-
-def loose_key(name: str) -> str:
-    """Comparison key without legal-form words, spaces or case (as in the harness)."""
-    folded = unicodedata.normalize("NFKC", name)
-    return _SEPARATORS.sub("", _LEGAL_FORMS.sub("", folded)).casefold()
-
-
-def loose_site(name: str | None) -> str | None:
-    """Return the closest EDI site when it is similar enough and clearly ahead."""
-    if name is None or not loose_key(name):
-        return None
-    best: dict[str, float] = {}
-    for key, site in CUSTOMER_SITES.items():
-        score = SequenceMatcher(None, loose_key(name), loose_key(key)).ratio()
-        best[site] = max(best.get(site, 0.0), score)
-    ranked = sorted(best.values(), reverse=True)
-    top_site = max(best, key=lambda site: best[site])
-    runner_up = ranked[1] if len(ranked) > 1 else 0.0
-    if ranked[0] >= LOOSE_CUTOFF and ranked[0] - runner_up >= LOOSE_MARGIN:
-        return top_site
-    return None
 
 
 @dataclass(frozen=True)
@@ -77,10 +45,6 @@ class RulePreview:
     ready_exact: int
     ready_loose: int
     silent_loose: int
-
-
-def _canonical_name(site: str) -> str:
-    return next(key for key, value in CUSTOMER_SITES.items() if value == site)
 
 
 def preview_run(run_dir: Path, data_root: Path) -> RulePreview:
@@ -108,7 +72,7 @@ def preview_run(run_dir: Path, data_root: Path) -> RulePreview:
         if sheet.status in (PipelineStatus.ERROR, PipelineStatus.FORMAT_ERROR) or site is None:
             continue
         mapped = EdiFields.model_validate(
-            {**sheet.fields.model_dump(), "customer": _canonical_name(site)}
+            {**sheet.fields.model_dump(), "customer": canonical_name(site)}
         )
         present = None not in (mapped.part_no, mapped.order_no, mapped.quantity)
         if present and not format_problems(mapped):

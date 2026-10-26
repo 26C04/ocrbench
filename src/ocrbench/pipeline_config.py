@@ -135,11 +135,14 @@ class OcrLlmConfig(_PipelineBase):
     ocr: OcrConfig
     llm_model: Annotated[str, Field(min_length=1)]
     prompt_name: Annotated[str, Field(min_length=1)]
+    snap_customer: bool = False
+    rules_check: bool = False
 
 
 class OcrRulesConfig(_PipelineBase):
     kind: Literal["ocr_rules"]
     ocr: OcrConfig
+    snap_customer: bool = False
 
 
 class VisionConfig(_PipelineBase):
@@ -147,6 +150,7 @@ class VisionConfig(_PipelineBase):
     model: Annotated[str, Field(min_length=1)]
     prompt_name: Annotated[str, Field(min_length=1)]
     output: Literal["order_document", "edi_fields"] = "order_document"
+    snap_customer: bool = False
 
 
 class ExternalConfig(_PipelineBase):
@@ -266,6 +270,8 @@ def build_pipeline(
                 llm=llm,
                 model=config.llm_model,
                 instructions=instructions.text,
+                snap_customer=config.snap_customer,
+                rules_check=config.rules_check,
             )
             record = {
                 **_prompt_record(instructions),
@@ -276,6 +282,7 @@ def build_pipeline(
             rules = OcrRulesPipeline(
                 pipeline_id=config.pipeline_id,
                 ocr=_ocr_engine(config.ocr, adapter=adapter, confirm_cloud=confirm_cloud),
+                snap_customer=config.snap_customer,
             )
             return BuiltPipeline(rules, {}, isinstance(config.ocr, MistralConfig))
         case VisionConfig():
@@ -287,6 +294,7 @@ def build_pipeline(
                 model=config.model,
                 prompt=vision_prompt.text,
                 output=config.output,
+                snap_customer=config.snap_customer,
             )
             record = {
                 **_prompt_record(vision_prompt),

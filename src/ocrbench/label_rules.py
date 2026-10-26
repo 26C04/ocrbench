@@ -27,6 +27,7 @@ from ocrbench.pipelines import (
     _status_for,
     elapsed_ms,
 )
+from ocrbench.postprocess import snapped
 from ocrbench.preprocess import PreprocessResult
 
 RULES_VERSION: Final[str] = "2"
@@ -100,9 +101,10 @@ def extract_fields(text: str) -> EdiFields:
 class OcrRulesPipeline:
     """Two-layer candidate whose Layer 2 is :func:`extract_fields` instead of an LLM."""
 
-    def __init__(self, *, pipeline_id: str, ocr: OcrEngine) -> None:
+    def __init__(self, *, pipeline_id: str, ocr: OcrEngine, snap_customer: bool = False) -> None:
         self._pipeline_id = pipeline_id
         self._ocr = ocr
+        self._snap_customer = snap_customer
 
     @property
     def pipeline_id(self) -> str:
@@ -116,6 +118,7 @@ class OcrRulesPipeline:
             "ocr_engine": self._ocr.engine_id,
             **details,
             "rules_version": RULES_VERSION,
+            **({"snap_customer": "on"} if self._snap_customer else {}),
         }
 
     def extract(self, image: PreprocessResult) -> PipelineResult:
@@ -136,6 +139,8 @@ class OcrRulesPipeline:
             )
         layer2_started = perf_counter_ns()
         fields = extract_fields(ocr.text)
+        if self._snap_customer:
+            fields = snapped(fields)
         return PipelineResult(
             status=_status_for(fields),
             fields=fields,

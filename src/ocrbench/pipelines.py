@@ -24,6 +24,7 @@ from ocrbench import config
 from ocrbench.edi_fields import EdiFields, edi_format_schema, format_problems, parse_edi_output
 from ocrbench.ollama_adapter import ChatResult, OllamaAdapter, TextLlm
 from ocrbench.parsing import ParseStatus, parse_model_output
+from ocrbench.postprocess import cross_check, snapped
 from ocrbench.preprocess import PreprocessResult
 from ocrbench.schema import OrderDocument, ollama_format_schema
 
@@ -136,6 +137,12 @@ def _error_name(error: BaseException) -> str:
     return name
 
 
+def _option_flags(*, snap_customer: bool, rules_check: bool = False) -> dict[str, str]:
+    """Describe only the options that are on, so earlier configs keep their description."""
+    flags = {"snap_customer": snap_customer, "rules_check": rules_check}
+    return {name: "on" for name, value in flags.items() if value}
+
+
 class OcrLlmPipeline:
     """Two-layer candidate: an OCR engine followed by a local text LLM."""
 
@@ -148,6 +155,8 @@ class OcrLlmPipeline:
         model: str,
         instructions: str,
         seed: int = config.SEED,
+        snap_customer: bool = False,
+        rules_check: bool = False,
     ) -> None:
         self._pipeline_id = pipeline_id
         self._ocr = ocr
@@ -155,6 +164,8 @@ class OcrLlmPipeline:
         self._model = model
         self._instructions = instructions
         self._seed = seed
+        self._snap_customer = snap_customer
+        self._rules_check = rules_check
 
     @property
     def pipeline_id(self) -> str:
@@ -169,6 +180,7 @@ class OcrLlmPipeline:
             **details,
             "llm_model": self._model,
             "seed": str(self._seed),
+            **_option_flags(snap_customer=self._snap_customer, rules_check=self._rules_check),
         }
 
     def extract(self, image: PreprocessResult) -> PipelineResult:
@@ -212,6 +224,8 @@ class OcrLlmPipeline:
                 fields = parsed.fields
                 break
 
+        if fields is not None:
+            fields = self._checked(fields, ocr.text)
         if error is not None:
             status = PipelineStatus.ERROR
         elif fields is None:
@@ -230,6 +244,17 @@ class OcrLlmPipeline:
             raw_outputs=tuple(raw_outputs),
             error=error,
         )
+
+    def _checked(self, fields: EdiFields, ocr_text: str) -> EdiFields:
+        if self._snap_customer:
+            fields = snapped(fields)
+        if self._rules_check:
+            # Imported here: label_rules builds on this module.
+            from ocrbench.label_rules import extract_fields
+
+            rules = extract_fields(ocr_text)
+            fields = cross_check(fields, snapped(rules) if self._snap_customer else rules)
+        return fields
 
 
 def order_document_to_edi(document: OrderDocument) -> tuple[EdiFields, PipelineStatus]:
@@ -263,6 +288,7 @@ class VisionPipeline:
         prompt: str,
         output: VisionOutput = "order_document",
         seed: int = config.SEED,
+        snap_customer: bool = False,
     ) -> None:
         self._pipeline_id = pipeline_id
         self._adapter = adapter
@@ -270,6 +296,7 @@ class VisionPipeline:
         self._prompt = prompt
         self._output: VisionOutput = output
         self._seed = seed
+        self._snap_customer = snap_customer
 
     @property
     def pipeline_id(self) -> str:
@@ -282,6 +309,7 @@ class VisionPipeline:
             "vision_model": self._model,
             "output": self._output,
             "seed": str(self._seed),
+            **_option_flags(snap_customer=self._snap_customer),
         }
 
     def extract(self, image: PreprocessResult) -> PipelineResult:
@@ -318,6 +346,9 @@ class VisionPipeline:
             status = PipelineStatus.FORMAT_ERROR
         else:
             fields, status = order_document_to_edi(document)
+            if self._snap_customer and status is not PipelineStatus.NEEDS_REVIEW:
+                fields = snapped(fields)
+                status = _status_for(fields)
         elapsed = elapsed_ms(started)
         return PipelineResult(
             status=status,
@@ -358,6 +389,8 @@ class VisionPipeline:
                 fields = parsed.fields
                 break
 
+        if fields is not None and self._snap_customer:
+            fields = snapped(fields)
         if error is not None:
             status = PipelineStatus.ERROR
         elif fields is None:

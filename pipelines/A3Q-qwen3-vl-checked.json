@@ -1,0 +1,9 @@
+{
+  "kind": "ocr_llm",
+  "pipeline_id": "A3Q",
+  "ocr": {"engine": "qwen_vl", "model": "qwen3-vl:8b", "max_side": 2048, "num_ctx": 12288},
+  "llm_model": "qwen3:8b",
+  "prompt_name": "edi-fields",
+  "snap_customer": true,
+  "rules_check": true
+}

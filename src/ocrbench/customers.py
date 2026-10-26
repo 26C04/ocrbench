@@ -13,6 +13,7 @@ misread field is caught before it becomes a silent error.
 import re
 import unicodedata
 from collections.abc import Mapping
+from difflib import SequenceMatcher
 from types import MappingProxyType
 from typing import Final
 
@@ -61,3 +62,51 @@ SITE_FORMATS: Final[Mapping[str, Mapping[str, re.Pattern[str]]]] = MappingProxyT
     }
 )
 """Printed formats per EDI site, checked with ``fullmatch`` on the trimmed value."""
+
+
+LOOSE_CUTOFF: Final[float] = 0.65
+LOOSE_MARGIN: Final[float] = 0.1
+_LEGAL_FORMS = re.compile(
+    r"(株式会社|有限会社|\(株\)|\(有\)|CO\.,?\s*LTD\.?|INC\.?)", re.IGNORECASE
+)
+_LOOSE_SEPARATORS = re.compile(r"[\s・.,]")
+
+
+def loose_key(name: str) -> str:
+    """Comparison key without legal-form words, spaces or case (as in the template harness)."""
+    folded = unicodedata.normalize("NFKC", name)
+    return _LOOSE_SEPARATORS.sub("", _LEGAL_FORMS.sub("", folded)).casefold()
+
+
+def loose_site(name: str | None) -> str | None:
+    """Return the closest EDI site when it is similar enough and clearly ahead of the next.
+
+    Half-width katakana such as ﾏｼﾝﾂｰﾙ rarely survive OCR character for
+    character, so an exact match misses names a person reads at once. With one
+    customer in the table, any similar name maps to it, a similarly named
+    company included; the format check is what still guards the other fields.
+    """
+    if name is None or not loose_key(name):
+        return None
+    best: dict[str, float] = {}
+    for key, site in CUSTOMER_SITES.items():
+        score = SequenceMatcher(None, loose_key(name), loose_key(key)).ratio()
+        best[site] = max(best.get(site, 0.0), score)
+    ranked = sorted(best.values(), reverse=True)
+    runner_up = ranked[1] if len(ranked) > 1 else 0.0
+    if ranked[0] >= LOOSE_CUTOFF and ranked[0] - runner_up >= LOOSE_MARGIN:
+        return max(best, key=lambda site: best[site])
+    return None
+
+
+def canonical_name(site: str) -> str:
+    """Return the table's printed name for an EDI site."""
+    return next(key for key, value in _CUSTOMER_SITES.items() if value == site)
+
+
+def snap_customer(name: str | None) -> str | None:
+    """Replace a near-miss customer name with its site's printed name; leave others as read."""
+    if name is None or resolve_customer_site(name) is not None:
+        return name
+    site = loose_site(name)
+    return canonical_name(site) if site is not None else name

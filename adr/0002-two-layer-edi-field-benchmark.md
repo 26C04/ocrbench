@@ -86,6 +86,13 @@ fields. All candidates read the same sheets and are scored by the same code.
   6 digits with an optional `-YYYY`). Anything else goes to review, so a value
   read from the wrong box is not a silent error. The formats live beside the
   customer table in `customers.py`; a new customer needs its own.
+- **Optional checks per candidate (added 26 Oct).** `snap_customer` lets a
+  pipeline replace a near-miss customer name with its site's printed name
+  (the harness's loose match), and `rules_check` keeps an LLM field only when
+  the label rules on the same OCR text agree or one of two values fits the
+  site's format. Both are off unless a config turns them on (A1X, A3X, A3Q,
+  A3R, BX), so the original candidates and their runs are unchanged. Scoring
+  is unchanged too: a snapped name is still compared through the exact table.
 - Comparison stays exact after the normalization below. One wrong digit is a
   wrong EDI entry.
 

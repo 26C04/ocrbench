@@ -9,6 +9,7 @@ import pytest
 
 import ocrbench.cli as cli_module
 from ocrbench.cli import main
+from ocrbench.customers import loose_site
 from ocrbench.pipeline_config import BuiltPipeline, ExternalConfig
 from ocrbench.pipelines import FakePipeline, PipelineResult, PipelineStatus
 from scripts import customer_rule_preview as preview
@@ -16,11 +17,11 @@ from tests.helpers import make_edi_dataset, read_edi_ground_truth
 
 
 def test_loose_site_accepts_close_names_and_rejects_others() -> None:
-    assert preview.loose_site("Nidecﾏｼﾝﾂｰﾙ株式会社") == "hwao_nmtj"
-    assert preview.loose_site("Nidecマシンツ-ル株式会社") == "hwao_nmtj"
-    assert preview.loose_site("山田大作") is None
-    assert preview.loose_site("株式会社") is None
-    assert preview.loose_site(None) is None
+    assert loose_site("Nidecﾏｼﾝﾂｰﾙ株式会社") == "hwao_nmtj"
+    assert loose_site("Nidecマシンツ-ル株式会社") == "hwao_nmtj"
+    assert loose_site("山田大作") is None
+    assert loose_site("株式会社") is None
+    assert loose_site(None) is None
 
 
 def _run_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
