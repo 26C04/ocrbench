@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ground Truth Entry</title>
+<!--
+  Offline ground-truth entry for ocrbench (ADR-0001 §4, src/ocrbench/schema.py).
+
+  Open this file directly from disk in Microsoft Edge or Google Chrome. It makes
+  no network requests: documents and ground truth never leave this computer.
+
+  1. Click "Open dataset folder" and choose the dataset root (OCRBENCH_DATA_DIR),
+     the folder that contains raw/.
+  2. Pick a document, type what is printed on it, choose scan/photo and split.
+  3. Save (Ctrl+S). This writes gt/<doc-id>.json and refreshes assignments.csv
+     for `ocrbench dataset build-manifest`.
+
+  The doc-id is derived from the file's SHA-256 exactly as build-manifest does,
+  so ground truth saved before or after build-manifest lands under the same name.
+-->
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --line: #d9d9d4; --accent: #2f5fd0; --ok: #1f7a4a; --warn: #a15c00; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1d; --text: #ececea; --muted: #a3a39d;
+      --line: #3a3a36; --accent: #7fa2ff; --ok: #5fcf8f; --warn: #f0a84a; --bad: #ff8a80;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, "Segoe UI", "Yu Gothic UI", sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+           padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  #progress { color: var(--muted); font-variant-numeric: tabular-nums; }
+  main { display: grid; grid-template-columns: 260px 1fr 420px; height: calc(100vh - 53px); }
+  aside, section { overflow: auto; }
+  aside { border-right: 1px solid var(--line); background: var(--panel); }
+  #files { list-style: none; margin: 0; padding: 0; }
+  #files li { padding: 6px 12px; cursor: pointer; border-bottom: 1px solid var(--line);
+              display: flex; justify-content: space-between; gap: 8px; }
+  #files li.active { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+  #files .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .tag.done { color: var(--ok); }
+  #viewer { display: flex; align-items: flex-start; justify-content: center; padding: 12px; }
+  #viewer img { max-width: 100%; cursor: zoom-in; }
+  #viewer img.zoom { max-width: none; cursor: zoom-out; }
+  #viewer embed { width: 100%; height: calc(100vh - 80px); }
+  #form { border-left: 1px solid var(--line); background: var(--panel); padding: 12px 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-top: 10px; }
+  input, select { width: 100%; padding: 6px 8px; font: inherit; color: var(--text);
+                  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+  input.invalid { border-color: var(--bad); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  th { font-size: 12px; color: var(--muted); text-align: left; font-weight: normal; }
+  td { padding: 2px 2px; }
+  td input { padding: 4px 6px; }
+  td.qty { width: 80px; }
+  button { font: inherit; padding: 6px 12px; border-radius: 4px; cursor: pointer;
+           border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.icon { padding: 2px 8px; }
+  .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  #status { margin-top: 10px; min-height: 1.4em; }
+  #status.ok { color: var(--ok); } #status.bad { color: var(--bad); }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  #docid { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--muted); }
+  .empty { color: var(--muted); padding: 24px; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    aside { max-height: 30vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ground Truth Entry</h1>
+  <button id="open" class="primary">Open dataset folder</button>
+  <span id="progress"></span>
+</header>
+<main>
+  <aside><ul id="files"></ul><p class="empty" id="nofiles">Open the dataset folder (the one that contains <code>raw/</code>).</p></aside>
+  <section id="viewer"><p class="empty">The selected document appears here. Click the image to zoom.</p></section>
+  <section id="form" hidden>
+    <div id="docid"></div>
+    <div class="row2">
+      <div><label for="source_kind">Source</label>
+        <select id="source_kind"><option value="">choose…</option><option value="scan">scan</option><option value="photo">photo</option></select></div>
+      <div><label for="split">Split</label>
+        <select id="split"><option value="">choose…</option><option value="dev">dev (40)</option><option value="selection">selection (20)</option><option value="final">final (40)</option></select></div>
+    </div>
+    <label for="customer_name">customer_name</label>
+    <input id="customer_name" autocomplete="off">
+    <label for="order_no">order_no</label>
+    <input id="order_no" autocomplete="off">
+    <label for="delivery_date">delivery_date</label>
+    <input id="delivery_date" autocomplete="off" placeholder="2026-08-01">
+    <p class="hint">Type exactly what is printed. Leave a field empty only if it is missing or unreadable (saved as null). Dates may be typed as 2026/8/1 and are saved as YYYY-MM-DD.</p>
+    <label>items</label>
+    <table>
+      <thead><tr><th>part_no</th><th>material</th><th>num_pieces</th><th></th></tr></thead>
+      <tbody id="items"></tbody>
+    </table>
+    <button id="additem" class="icon" type="button">+ item</button>
+    <p class="hint">Quantities like 1,200個 are saved as 1200.</p>
+    <div class="actions">
+      <button id="save" class="primary" type="button">Save (Ctrl+S)</button>
+      <button id="next" type="button">Next unfinished →</button>
+    </div>
+    <div id="status"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const ALLOWED = [".pdf", ".jpg", ".jpeg", ".png"];
+const TARGETS = { dev: [20, 20], selection: [10, 10], final: [20, 20] };
+const UNITS = ["個入", "pcs", "PCS", "pc", "個", "枚", "本"];
+const DATE_PATTERNS = [
+  /^(\d{4})-(\d{2})-(\d{2})$/, /^(\d{4})-(\d)-(\d)$/,
+  /^(\d{4})\/(\d{2})\/(\d{2})$/, /^(\d{4})\/(\d)\/(\d)$/, /^(\d{4})\.(\d{2})\.(\d{2})$/,
+];
+
+let root = null, rawDir = null, gtDir = null;
+let docs = [];            // {name, handle, docId}
+const labels = new Map(); // docId -> {source_kind, split}
+const hasGt = new Set();  // docIds with a saved gt file
+let current = null, objectUrl = null;
+
+const $ = (id) => document.getElementById(id);
+
+function status(text, kind) { const el = $("status"); el.textContent = text; el.className = kind || ""; }
+
+async function sha256Hex(file) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function readText(dir, name) {
+  try { return await (await (await dir.getFileHandle(name)).getFile()).text(); }
+  catch { return null; }
+}
+
+async function writeText(dir, name, text) {
+  const handle = await dir.getFileHandle(name, { create: true });
+  const stream = await handle.createWritable();
+  await stream.write(text);
+  await stream.close();
+}
+
+function parseCsv(text) {
+  const rows = text.replace(/^﻿/, "").split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(","));
+  if (!rows.length) return [];
+  const header = rows[0].map((h) => h.trim());
+  return rows.slice(1).map((r) => Object.fromEntries(header.map((h, i) => [h, (r[i] || "").trim()])));
+}
+
+async function openFolder() {
+  if (!window.showDirectoryPicker) {
+    alert("This browser cannot open folders. Please use Microsoft Edge or Google Chrome.");
+    return;
+  }
+  root = await window.showDirectoryPicker({ mode: "readwrite" });
+  try { rawDir = await root.getDirectoryHandle("raw"); }
+  catch { alert("This folder has no raw/ subfolder. Choose the dataset root (OCRBENCH_DATA_DIR)."); return; }
+  gtDir = await root.getDirectoryHandle("gt", { create: true });
+  await loadDocs();
+}
+
+async function loadDocs() {
+  docs = []; labels.clear(); hasGt.clear();
+  const csvRows = parseCsv((await readText(root, "assignments.csv")) || "");
+  const csvByName = new Map(csvRows.map((r) => [r.file, r]));
+  let manifestDocs = [];
+  try { manifestDocs = JSON.parse((await readText(root, "manifest.json")) || "{}").docs || []; } catch {}
+  const manifestById = new Map(manifestDocs.map((d) => [d.doc_id, d]));
+
+  $("progress").textContent = "Reading files…";
+  for await (const [name, handle] of rawDir.entries()) {
+    if (handle.kind !== "file" || name.startsWith(".")) continue;
+    if (!ALLOWED.some((ext) => name.toLowerCase().endsWith(ext))) continue;
+    const docId = "doc-" + (await sha256Hex(await handle.getFile())).slice(0, 12);
+    docs.push({ name, handle, docId });
+    const known = manifestById.get(docId) || csvByName.get(name);
+    if (known && known.source_kind && known.split) {
+      labels.set(docId, { source_kind: known.source_kind, split: known.split });
+    }
+  }
+  for await (const [name] of gtDir.entries()) {
+    if (/^doc-[0-9a-f]{12}\.json$/.test(name)) hasGt.add(name.slice(0, -5));
+  }
+  docs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  renderList();
+  const first = docs.find((d) => !hasGt.has(d.docId)) || docs[0];
+  if (first) await select(first);
+}
+
+function renderList() {
+  const list = $("files");
+  list.innerHTML = "";
+  $("nofiles").hidden = docs.length > 0;
+  if (!docs.length) $("nofiles").textContent = "raw/ has no .jpg, .jpeg, .png or .pdf files.";
+  for (const doc of docs) {
+    const li = document.createElement("li");
+    li.className = current === doc ? "active" : "";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = doc.name;
+    const tag = document.createElement("span");
+    const label = labels.get(doc.docId);
+    tag.className = "tag" + (hasGt.has(doc.docId) ? " done" : "");
+    tag.textContent = hasGt.has(doc.docId) ? "✓ " + (label ? label.split + "/" + label.source_kind : "saved") : "todo";
+    li.append(name, tag);
+    li.onclick = () => select(doc);
+    list.append(li);
+  }
+  const counts = {};
+  for (const doc of docs) {
+    const label = labels.get(doc.docId);
+    if (!hasGt.has(doc.docId) || !label) continue;
+    const key = label.split + "/" + label.source_kind;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const parts = Object.entries(TARGETS).map(([split, [scan, photo]]) =>
+    `${split}: scan ${counts[split + "/scan"] || 0}/${scan}, photo ${counts[split + "/photo"] || 0}/${photo}`);
+  $("progress").textContent = `${hasGt.size} saved of ${docs.length} files · ` + parts.join(" · ");
+}
+
+function itemRow(item) {
+  const tr = document.createElement("tr");
+  for (const [key, cls] of [["part_no", ""], ["material", ""], ["num_pieces", "qty"]]) {
+    const td = document.createElement("td"); if (cls) td.className = cls;
+    const input = document.createElement("input");
+    input.dataset.key = key; input.autocomplete = "off";
+    input.value = item && item[key] != null ? String(item[key]) : "";
+    td.append(input); tr.append(td);
+  }
+  const td = document.createElement("td");
+  const remove = document.createElement("button");
+  remove.type = "button"; remove.className = "icon"; remove.textContent = "×"; remove.title = "Remove item";
+  remove.onclick = () => tr.remove();
+  td.append(remove); tr.append(td);
+  $("items").append(tr);
+  return tr;
+}
+
+async function select(doc) {
+  current = doc;
+  renderList();
+  const file = await doc.handle.getFile();
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(file);
+  const viewer = $("viewer");
+  viewer.innerHTML = "";
+  if (doc.name.toLowerCase().endsWith(".pdf")) {
+    const embed = document.createElement("embed"); embed.src = objectUrl; embed.type = "application/pdf";
+    viewer.append(embed);
+  } else {
+    const img = document.createElement("img"); img.src = objectUrl; img.alt = doc.name;
+    img.onclick = () => img.classList.toggle("zoom");
+    viewer.append(img);
+  }
+
+  $("form").hidden = false;
+  $("docid").textContent = `${doc.name} → gt/${doc.docId}.json`;
+  const label = labels.get(doc.docId) || {};
+  $("source_kind").value = label.source_kind || "";
+  $("split").value = label.split || "";
+  let gt = null;
+  if (hasGt.has(doc.docId)) {
+    try { gt = JSON.parse(await readText(gtDir, doc.docId + ".json")); } catch {}
+  }
+  for (const key of ["customer_name", "order_no", "delivery_date"]) {
+    $(key).value = gt && gt[key] != null ? gt[key] : "";
+    $(key).classList.remove("invalid");
+  }
+  $("items").innerHTML = "";
+  const items = gt && Array.isArray(gt.items) && gt.items.length ? gt.items : [null];
+  items.forEach(itemRow);
+  status(gt ? "Loaded saved ground truth." : "");
+  $("customer_name").focus();
+}
+
+function optionalText(value) {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function normalizeDate(value) {
+  for (const pattern of DATE_PATTERNS) {
+    const m = pattern.exec(value);
+    if (!m) continue;
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const date = new Date(Date.UTC(y, mo - 1, d));
+    if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return null;
+    return `${m[1]}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  return null;
+}
+
+function normalizeQuantity(value) {
+  let text = value.replace(/\s+/g, "").replace(/[,，]/g, "")
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  for (const unit of UNITS) { if (text.endsWith(unit)) { text = text.slice(0, -unit.length); break; } }
+  if (!/^[0-9]+$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
+}
+
+function collect() {
+  const errors = [];
+  const doc = {
+    customer_name: optionalText($("customer_name").value),
+    order_no: optionalText($("order_no").value),
+    delivery_date: null,
+    items: [],
+  };
+  const dateText = optionalText($("delivery_date").value);
+  $("delivery_date").classList.remove("invalid");
+  if (dateText !== null) {
+    doc.delivery_date = normalizeDate(dateText);
+    if (doc.delivery_date === null) {
+      errors.push("delivery_date must be a real date such as 2026-08-01 or 2026/8/1.");
+      $("delivery_date").classList.add("invalid");
+    }
+  }
+  for (const tr of $("items").querySelectorAll("tr")) {
+    const get = (key) => tr.querySelector(`input[data-key="${key}"]`);
+    const qtyInput = get("num_pieces");
+    qtyInput.classList.remove("invalid");
+    const part = optionalText(get("part_no").value);
+    const material = optionalText(get("material").value);
+    const qtyText = optionalText(qtyInput.value);
+    if (part === null && material === null && qtyText === null) continue;
+    let qty = null;
+    if (qtyText !== null) {
+      qty = normalizeQuantity(qtyText);
+      if (qty === null) {
+        errors.push(`num_pieces "${qtyText}" is not a positive whole number.`);
+        qtyInput.classList.add("invalid");
+      }
+    }
+    doc.items.push({ part_no: part, material: material, num_pieces: qty });
+  }
+  if (!doc.items.length) errors.push("Add at least one item, or the document cannot be scored.");
+  if (!$("source_kind").value) errors.push("Choose scan or photo.");
+  if (!$("split").value) errors.push("Choose a split.");
+  return { doc, errors };
+}
+
+async function writeAssignments() {
+  const rows = ["file,source_kind,split"];
+  for (const doc of docs) {
+    const label = labels.get(doc.docId);
+    if (label && hasGt.has(doc.docId)) rows.push(`${doc.name},${label.source_kind},${label.split}`);
+  }
+  await writeText(root, "assignments.csv", rows.join("\r\n") + "\r\n");
+}
+
+async function save() {
+  if (!current) return false;
+  const { doc, errors } = collect();
+  if (errors.length) { status(errors.join(" "), "bad"); return false; }
+  if (current.name.includes(",")) { status("Rename this file: file names must not contain commas.", "bad"); return false; }
+  await writeText(gtDir, current.docId + ".json", JSON.stringify(doc, null, 2) + "\n");
+  hasGt.add(current.docId);
+  labels.set(current.docId, { source_kind: $("source_kind").value, split: $("split").value });
+  await writeAssignments();
+  renderList();
+  status(`Saved gt/${current.docId}.json`, "ok");
+  return true;
+}
+
+async function next() {
+  if (!docs.length) return;
+  const start = docs.indexOf(current);
+  for (let step = 1; step <= docs.length; step++) {
+    const candidate = docs[(start + step) % docs.length];
+    if (!hasGt.has(candidate.docId)) { await select(candidate); return; }
+  }
+  status("Every document has ground truth.", "ok");
+}
+
+$("open").onclick = () => openFolder().catch((e) => { if (e.name !== "AbortError") alert(e.message); });
+$("additem").onclick = () => itemRow(null).querySelector("input").focus();
+$("save").onclick = () => save().catch((e) => status(e.message, "bad"));
+$("next").onclick = () => next();
+document.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    save().then((ok) => { if (ok) return next(); }).catch((e) => status(e.message, "bad"));
+  }
+});
+</script>
+</body>
+</html>
