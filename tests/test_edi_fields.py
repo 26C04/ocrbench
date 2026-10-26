@@ -14,6 +14,7 @@ from ocrbench.edi_fields import (
     comparable_fields,
     compare_fields,
     edi_format_schema,
+    format_problems,
     ground_truth_problems,
     normalize_order_no,
     parse_edi_output,
@@ -182,3 +183,25 @@ def test_ground_truth_problems() -> None:
         "quantity: missing",
     ]
     assert ground_truth_problems(_fields(customer=None)) == ["customer: missing"]
+
+
+def test_format_problems_accepts_the_printed_nidec_formats() -> None:
+    assert format_problems(_fields(order_no="000001-2026")) == []
+    assert format_problems(_fields(order_no="000001")) == []
+    assert format_problems(_fields(part_no=" HR000000001 ")) == []
+    assert format_problems(_fields(part_no=None, order_no=None)) == []
+    assert format_problems(_fields(customer=None)) == []
+
+
+@pytest.mark.parametrize(
+    ("fields", "problem"),
+    [
+        (_fields(part_no="COLLAR"), "part_no does not have the hwao_nmtj format"),
+        (_fields(part_no="H0000000001"), "part_no does not have the hwao_nmtj format"),
+        (_fields(order_no="1224272"), "order_no does not have the hwao_nmtj format"),
+        (_fields(order_no="000001+2026"), "order_no does not have the hwao_nmtj format"),
+        (_fields(customer="Nidecモーター株式会社"), "customer does not match any known EDI site"),
+    ],
+)
+def test_format_problems_flags_values_from_the_wrong_box(fields: EdiFields, problem: str) -> None:
+    assert format_problems(fields) == [problem]

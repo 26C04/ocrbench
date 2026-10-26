@@ -1,2 +1,4 @@
 {"ts":"20261020T160133Z","action":"add","hash":"9b5500cdf2d5","note":"Initial Layer 2 prompt for the 4 EDI fields (ADR-0002); tune on dev only."}
 {"ts":"20261020T160134Z","action":"activate","hash":"9b5500cdf2d5","note":"Initial Layer 2 prompt for the 4 EDI fields (ADR-0002)."}
+{"ts":"20261026T075155Z","action":"add","hash":"ddce02c69fdf","note":"v2: name each box and what it is not (部品名, 伝票No, 送り先, 営業), and give the Nidec part and order number formats. Dev-only tuning after dev1 (26 Oct)."}
+{"ts":"20261026T075156Z","action":"activate","hash":"ddce02c69fdf","note":"v2 after dev1 field-confusion analysis."}

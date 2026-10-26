@@ -8,7 +8,7 @@ from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ocrbench.customers import resolve_customer_site
+from ocrbench.customers import SITE_FORMATS, resolve_customer_site
 from ocrbench.normalize import strip_outer_whitespace
 from ocrbench.parsing import ParseStatus
 
@@ -140,4 +140,24 @@ def ground_truth_problems(gt: EdiFields, rule: OrderNoRule = ORDER_NO_RULE) -> l
             problems.append("customer: no EDI site is mapped for this name")
         else:
             problems.append(f"{name}: missing")
+    return problems
+
+
+def format_problems(fields: EdiFields) -> list[str]:
+    """Return why read values cannot go to the EDI unchecked, in plain words.
+
+    The customer must map to a known EDI site, and the site's part and order
+    numbers must have their printed format. Missing values are not reported
+    here; the caller already treats them as not read.
+    """
+    if fields.customer is None:
+        return []
+    site = resolve_customer_site(fields.customer)
+    if site is None:
+        return ["customer does not match any known EDI site"]
+    problems: list[str] = []
+    for name, pattern in SITE_FORMATS.get(site, {}).items():
+        value = getattr(fields, name)
+        if value is not None and pattern.fullmatch(strip_outer_whitespace(value)) is None:
+            problems.append(f"{name} does not have the {site} format")
     return problems

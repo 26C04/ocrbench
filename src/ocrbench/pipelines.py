@@ -21,7 +21,7 @@ from typing import Any, Final, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from ocrbench import config
-from ocrbench.edi_fields import EdiFields, edi_format_schema, parse_edi_output
+from ocrbench.edi_fields import EdiFields, edi_format_schema, format_problems, parse_edi_output
 from ocrbench.ollama_adapter import ChatResult, OllamaAdapter, TextLlm
 from ocrbench.parsing import ParseStatus, parse_model_output
 from ocrbench.preprocess import PreprocessResult
@@ -115,8 +115,11 @@ def elapsed_ms(started_ns: int) -> float:
 
 
 def _status_for(fields: EdiFields) -> PipelineStatus:
+    """Mark a sheet ``ok`` only when every field is read and passes the site's checks."""
     values = (fields.customer, fields.part_no, fields.order_no, fields.quantity)
-    return PipelineStatus.OK if all(v is not None for v in values) else PipelineStatus.NEEDS_REVIEW
+    if any(v is None for v in values) or format_problems(fields):
+        return PipelineStatus.NEEDS_REVIEW
+    return PipelineStatus.OK
 
 
 def _error_name(error: BaseException) -> str:

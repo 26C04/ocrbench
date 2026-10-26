@@ -1,2 +1,4 @@
 {"ts":"20261026T073931Z","action":"add","hash":"cdbdd0bf709a","note":"Vision (B) version of edi-fields: same 4 fields and rules, read from the image (ADR-0002); tune on dev only."}
 {"ts":"20261026T073931Z","action":"activate","hash":"cdbdd0bf709a","note":"Vision (B) version of edi-fields (ADR-0002)."}
+{"ts":"20261026T075157Z","action":"add","hash":"5246e13ca394","note":"v2: name each box and what it is not (部品名, 伝票No, 送り先, 営業), and give the Nidec part and order number formats. Dev-only tuning after dev1 (26 Oct)."}
+{"ts":"20261026T075157Z","action":"activate","hash":"5246e13ca394","note":"v2 after dev1 field-confusion analysis."}

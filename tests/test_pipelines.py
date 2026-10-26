@@ -290,6 +290,19 @@ def test_vision_pipeline_edi_fields_output_flags_missing_and_failures() -> None:
     assert broken.error == "vision model failed: AssertionError"
 
 
+def test_vision_pipeline_sends_a_badly_formatted_value_to_review() -> None:
+    wrong_box = {**FULL, "part_no": "COLLAR"}
+    result = VisionPipeline(
+        pipeline_id="B",
+        adapter=FakeOllamaAdapter([json.dumps(wrong_box)]),
+        model="m",
+        prompt="p",
+        output="edi_fields",
+    ).extract(IMAGE)
+    assert result.status is PipelineStatus.NEEDS_REVIEW
+    assert result.fields is not None and result.fields.part_no == "COLLAR"
+
+
 def _script(tmp_path: Path, body: str) -> list[str]:
     script = tmp_path / "harness.py"
     script.write_text(body, encoding="utf-8")

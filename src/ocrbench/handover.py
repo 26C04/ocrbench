@@ -13,7 +13,7 @@ import re
 from typing import Any, Final
 
 from ocrbench.customers import CUSTOMER_TABLE_VERSION, resolve_customer_site
-from ocrbench.edi_fields import EDI_FIELD_NAMES, ORDER_NO_RULE
+from ocrbench.edi_fields import EDI_FIELD_NAMES, ORDER_NO_RULE, format_problems
 from ocrbench.pipelines import PipelineResult, PipelineStatus
 
 HANDOVER_SCHEMA_VERSION: Final[int] = 1
@@ -36,8 +36,8 @@ def handover_record(result: PipelineResult, *, pipeline_id: str) -> dict[str, An
     if result.status is not PipelineStatus.OK:
         reasons.append(f"pipeline status is {result.status.value}")
     reasons.extend(f"{name} was not read" for name in EDI_FIELD_NAMES if fields[name] is None)
-    if fields["customer"] is not None and site is None:
-        reasons.append("customer does not match any known EDI site")
+    if result.fields is not None:
+        reasons.extend(format_problems(result.fields))
     if result.error:
         reasons.append(result.error)
     return {

@@ -78,7 +78,14 @@ fields. All candidates read the same sheets and are scored by the same code.
 - Unknown keys are rejected (`additionalProperties: false`). Text around the
   JSON, Markdown, and code fences are format errors, as in ADR-0001 §2.
 - Delivery date and material are not scored. The existing `OrderDocument`
-  schema stays in the code and is still used by pipeline B internally.
+  schema stays in the code; pipeline B asks for the 4 fields directly
+  (`"output": "edi_fields"`) since dev1 showed the item list confusing it.
+- **Format check before EDI (added 26 Oct after dev1).** A sheet is `ok` only
+  when its customer maps to a known EDI site and that site's part and order
+  numbers have their printed format (Nidec: 2 capital letters + 9 digits;
+  6 digits with an optional `-YYYY`). Anything else goes to review, so a value
+  read from the wrong box is not a silent error. The formats live beside the
+  customer table in `customers.py`; a new customer needs its own.
 - Comparison stays exact after the normalization below. One wrong digit is a
   wrong EDI entry.
 
