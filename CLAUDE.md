@@ -91,7 +91,7 @@ Steps the script automates:
 
 ---
 
-## Current status (as of 20 Oct 2026)
+## Current status (as of 27 Oct 2026)
 
 - Steps 0–4, Step 5 part 1 (answers CSV import) and Step 5 part 2 (pipeline runner,
   `ocrbench run --pipeline`, `compare-runs` for pipeline runs) done in PR #23 (no reviews yet)
@@ -109,9 +109,18 @@ Steps the script automates:
   answer key: ask Kimura for the PDF of every sheet they scan or photograph for us
 - Added `doctor`, `run-all`, `leaderboard`, `dataset answers-from-pdf` (answer key from the PDF,
   matched to scans/photos by page number)
-- **Next:** on the Windows machine follow `docs/kimura-benchmark-run.md`: scan and photograph the
-  51 printed sheets, build the answer key from the PDF, run A1L, A2, A3, B, A1R on dev;
-  group decides D2 (customer matching)
+- 26–27 Oct, lab PC (RTX 5070 Ti): 51 printed sheets photographed on the document camera (no scans
+  yet), answer key from the PDF, 20 dev / 31 final. Dev runs dev1–dev7b tuned prompts, a format
+  check, Qwen-VL header crop (A3H) and GLM-OCR (A3G/A3GP, added after Prof. Sato asked for a model
+  survey; "Strata" not identified yet). PaddleOCR (A2) cannot install on Python 3.14
+- **Final run done once (final1, frozen commit 3a96013):** A3G 93.5% field accuracy, 24/31 sheets,
+  1 silent error (an order number), 1.6 s/sheet; A3GP 91.1%; C (Fuke's harness) 84.7%, 0 silent
+  errors, 15 empty fields; A3H 79.8%. **Chosen pipeline: A3G** (GLM-OCR on the top 40%, then
+  qwen3:8b). D2 does not change these scores. Tested under ordinary lab lighting
+- Issue 2 hand-off: `ocrbench harness-report` writes the report Fuke's `harness ship` and web UI
+  read (`docs/edi-handover-format.md`); the harness checks each slip against the EDI row
+- **Next:** rehearse `harness ship register` on the EDI test site, then a pilot with a worker check;
+  test scans and better lighting as a separate, non-primary result
 - **Kimura has sent the real instruction sheets.** They stay in local folders outside the repo and OneDrive
 - ADR-0002 D1: the owner decided to **keep** the "-2025" ending (current code, `ORDER_NO_RULE = KEEP`)
 - Still waiting on Kimura: cloud approval for Mistral OCR (keep it out of reports for the professor)
