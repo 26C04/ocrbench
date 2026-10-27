@@ -73,3 +73,28 @@ Example with invented values:
 
 The `schema_version` changes only if a key is removed or its meaning
 changes; new keys may be added without notice.
+
+## Feeding the automation-harness EDI script
+
+Fuke's `harness ship` (in `26C04/automation-harness`) already does steps 2–6:
+it finds exactly one 出荷入力 row by 手配番号, requires 入力状況 = 未, checks
+the part number (`base_equals`) and that 出荷数 does not exceed 注文残数, and
+stops on any mismatch. It reads the JSON report of `harness ocr read --out`.
+`ocrbench harness-report` writes the same shape from any pipeline, so the
+chosen pipeline (A3G) feeds it without changes on the harness side:
+
+```powershell
+uv run ocrbench harness-report --pipeline pipelines\A3G-glm-ocr-header.json `
+    --images C:\incoming\today --out C:\edi\today-report.json
+cd ..\automation-harness
+uv run harness ship register hwao_nmtj --ocr C:\edi\today-report.json   # rehearsal, sends nothing
+uv run harness ship run hwao_nmtj --ocr C:\edi\today-report.json --commit  # register + delivery note
+```
+
+Each sheet becomes one slip: `ok` with its `edi` keys when the record is
+`ready`, otherwise `needs_review` with the `review_reasons` and no keys. The
+harness skips `needs_review` slips. The report can also be opened in the
+harness web UI (`uv run --extra ui harness ui`), where a worker checks each
+row against the sheet before shipping. The report holds sheet values: keep it
+on the local PC, outside the repository and OneDrive. `--images` takes files
+or folders (PDF, JPEG, PNG); exit code 3 means at least one sheet needs review.

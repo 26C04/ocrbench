@@ -29,6 +29,7 @@ from ocrbench.dataset import (
 from ocrbench.edi_answers import import_answers
 from ocrbench.field_metrics import compare, decide_cloud, summarize
 from ocrbench.handover import handover_record
+from ocrbench.harness_report import harness_report, harness_slip
 from ocrbench.leaderboard import (
     LeaderboardError,
     build_leaderboard,
@@ -538,6 +539,24 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("--confirm-cloud", action="store_true")
     extract.set_defaults(handler=_handle_extract)
 
+    harness = _leaf(
+        commands,
+        "harness-report",
+        shared=shared,
+        help_text="read sheets with a pipeline and write the report the harness EDI script reads",
+    )
+    harness.add_argument("--pipeline", type=Path, required=True, help="pipeline config JSON")
+    harness.add_argument(
+        "--images",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="sheet files (PDF, JPEG, PNG) or folders of them",
+    )
+    harness.add_argument("--out", type=Path, required=True, help="report JSON for `harness ship`")
+    harness.add_argument("--confirm-cloud", action="store_true")
+    harness.set_defaults(handler=_handle_harness_report)
+
     doctor = _leaf(
         commands,
         "doctor",
@@ -850,6 +869,63 @@ def _handle_extract(arguments: argparse.Namespace) -> int:
         )
     )
     return 0 if record["ready"] else 3
+
+
+_SHEET_SUFFIXES = (".pdf", ".jpg", ".jpeg", ".png")
+
+
+def _sheet_files(paths: Sequence[Path]) -> list[Path]:
+    """Expand folders to the sheet files inside them, sorted; keep files as given."""
+    files: list[Path] = []
+    for path in paths:
+        if not path.exists():
+            raise _CliInputError(f"sheet file or folder not found: {path}")
+        if path.is_dir():
+            files.extend(sorted(p for p in path.iterdir() if p.suffix.lower() in _SHEET_SUFFIXES))
+        else:
+            files.append(path)
+    if not files:
+        raise _CliInputError("no sheet files found")
+    return files
+
+
+def _handle_harness_report(arguments: argparse.Namespace) -> int:
+    """Write a harness report for a batch of sheets; exit 3 when any needs review.
+
+    The report holds the sheets' values for the EDI script, so it is written
+    to ``--out`` on the local PC only; the console shows counts only.
+    """
+    if arguments.out.exists():
+        raise _CliInputError("--out already exists; choose a new file")
+    files = _sheet_files(cast(list[Path], arguments.images))
+    built = _build_pipeline_from(arguments.pipeline, confirm_cloud=bool(arguments.confirm_cloud))
+    pipeline_id = built.pipeline.pipeline_id
+    slips: list[dict[str, Any]] = []
+    for path in files:
+        try:
+            prepared = preprocess(path)
+        except PreprocessError as error:
+            reason = f"cannot read the sheet: {_short_error(error)}"
+            slips.append(
+                harness_slip(
+                    {"ready": False, "review_reasons": [reason], "edi": {}, "fields": {}},
+                    source=path.name,
+                )
+            )
+            continue
+        record = handover_record(built.pipeline.extract(prepared), pipeline_id=pipeline_id)
+        slips.append(harness_slip(record, source=path.name))
+    report = harness_report(slips, pipeline_id=pipeline_id)
+    arguments.out.parent.mkdir(parents=True, exist_ok=True)
+    arguments.out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary = report["summary"]
+    _emit(
+        arguments,
+        {"out": str(arguments.out), **summary},
+        f"Wrote {arguments.out}: {summary['ok']} ready, {summary['needs_review']} to review"
+        f" (of {summary['slips']} sheets).",
+    )
+    return 0 if summary["needs_review"] == 0 else 3
 
 
 def _handle_doctor(arguments: argparse.Namespace) -> int:
