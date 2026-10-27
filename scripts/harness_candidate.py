@@ -114,7 +114,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         report = json.loads(out.read_text(encoding="utf-8"))
 
-    print(json.dumps(convert(report, arguments.customer), ensure_ascii=False))
+    # ASCII-only JSON: a Windows console or pipe may not be UTF-8 (cp1252 cannot print 株式会社).
+    print(json.dumps(convert(report, arguments.customer)))
     return 0
 
 

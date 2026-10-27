@@ -77,6 +77,7 @@ def test_main_runs_the_harness_and_prints_only_the_contract(
     printed = capsys.readouterr().out
     assert json.loads(printed)["fields"]["part_no"] == "HR000000001"
     assert "secret" not in printed
+    assert printed.isascii()
     assert calls[0][:4] == ["uv", "run", "--project", str(harness)]
 
 
