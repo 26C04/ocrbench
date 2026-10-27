@@ -24,7 +24,7 @@ from ocrbench import config
 from ocrbench.edi_fields import EdiFields, edi_format_schema, format_problems, parse_edi_output
 from ocrbench.ollama_adapter import ChatResult, OllamaAdapter, TextLlm
 from ocrbench.parsing import ParseStatus, parse_model_output
-from ocrbench.postprocess import cross_check, snapped
+from ocrbench.postprocess import cross_check, customer_from_text, snapped
 from ocrbench.preprocess import PreprocessResult
 from ocrbench.schema import OrderDocument, ollama_format_schema
 
@@ -137,9 +137,15 @@ def _error_name(error: BaseException) -> str:
     return name
 
 
-def _option_flags(*, snap_customer: bool, rules_check: bool = False) -> dict[str, str]:
+def _option_flags(
+    *, snap_customer: bool, rules_check: bool = False, customer_from_text: bool = False
+) -> dict[str, str]:
     """Describe only the options that are on, so earlier configs keep their description."""
-    flags = {"snap_customer": snap_customer, "rules_check": rules_check}
+    flags = {
+        "snap_customer": snap_customer,
+        "rules_check": rules_check,
+        "customer_from_text": customer_from_text,
+    }
     return {name: "on" for name, value in flags.items() if value}
 
 
@@ -157,6 +163,7 @@ class OcrLlmPipeline:
         seed: int = config.SEED,
         snap_customer: bool = False,
         rules_check: bool = False,
+        customer_from_text: bool = False,
     ) -> None:
         self._pipeline_id = pipeline_id
         self._ocr = ocr
@@ -166,6 +173,7 @@ class OcrLlmPipeline:
         self._seed = seed
         self._snap_customer = snap_customer
         self._rules_check = rules_check
+        self._customer_from_text = customer_from_text
 
     @property
     def pipeline_id(self) -> str:
@@ -180,7 +188,11 @@ class OcrLlmPipeline:
             **details,
             "llm_model": self._model,
             "seed": str(self._seed),
-            **_option_flags(snap_customer=self._snap_customer, rules_check=self._rules_check),
+            **_option_flags(
+                snap_customer=self._snap_customer,
+                rules_check=self._rules_check,
+                customer_from_text=self._customer_from_text,
+            ),
         }
 
     def extract(self, image: PreprocessResult) -> PipelineResult:
@@ -254,6 +266,8 @@ class OcrLlmPipeline:
 
             rules = extract_fields(ocr_text)
             fields = cross_check(fields, snapped(rules) if self._snap_customer else rules)
+        if self._customer_from_text:
+            fields = customer_from_text(fields, ocr_text)
         return fields
 
 

@@ -139,6 +139,7 @@ class OcrLlmConfig(_PipelineBase):
     prompt_name: Annotated[str, Field(min_length=1)]
     snap_customer: bool = False
     rules_check: bool = False
+    customer_from_text: bool = False
 
 
 class OcrRulesConfig(_PipelineBase):
@@ -276,6 +277,7 @@ def build_pipeline(
                 instructions=instructions.text,
                 snap_customer=config.snap_customer,
                 rules_check=config.rules_check,
+                customer_from_text=config.customer_from_text,
             )
             record = {
                 **_prompt_record(instructions),

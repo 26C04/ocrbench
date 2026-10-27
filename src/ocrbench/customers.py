@@ -99,6 +99,36 @@ def loose_site(name: str | None) -> str | None:
     return None
 
 
+TEXT_CUTOFF: Final[float] = 0.7
+
+
+def find_site_in_text(text: str) -> str | None:
+    """Return the EDI site whose printed name appears, closely enough, in a whole OCR text.
+
+    Each line is compared window by window with each site's name, legal forms
+    and spaces removed, so the name is found even when other text shares its
+    line. The best site must reach ``TEXT_CUTOFF`` and beat the next by
+    ``LOOSE_MARGIN``. This is a fallback for when the extracted customer field
+    maps to no site.
+    """
+    best: dict[str, float] = {}
+    lines = [loose_key(line) for line in text.splitlines()]
+    for key, site in CUSTOMER_SITES.items():
+        target = loose_key(key)
+        for line in lines:
+            for start in range(max(1, len(line) - len(target) + 1)):
+                window = line[start : start + len(target)]
+                score = SequenceMatcher(None, window, target).ratio()
+                best[site] = max(best.get(site, 0.0), score)
+    if not best:
+        return None
+    ranked = sorted(best.values(), reverse=True)
+    runner_up = ranked[1] if len(ranked) > 1 else 0.0
+    if ranked[0] >= TEXT_CUTOFF and ranked[0] - runner_up >= LOOSE_MARGIN:
+        return max(best, key=lambda site: best[site])
+    return None
+
+
 def canonical_name(site: str) -> str:
     """Return the table's printed name for an EDI site."""
     return next(key for key, value in _CUSTOMER_SITES.items() if value == site)

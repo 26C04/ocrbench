@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from ocrbench.customers import snap_customer
+from ocrbench.customers import find_site_in_text, snap_customer
 from ocrbench.edi_fields import EdiFields
 from ocrbench.ollama_adapter import FakeOllamaAdapter
 from ocrbench.pipelines import (
@@ -14,7 +14,7 @@ from ocrbench.pipelines import (
     VisionPipeline,
     describe_pipeline,
 )
-from ocrbench.postprocess import cross_check
+from ocrbench.postprocess import cross_check, customer_from_text
 from ocrbench.preprocess import PreprocessResult
 
 NIDEC = "Nidecマシンツール株式会社"
@@ -107,3 +107,32 @@ def test_vision_snap_customer() -> None:
     ).extract(IMAGE)
     assert result.status is PipelineStatus.OK
     assert result.fields is not None and result.fields.customer == NIDEC
+
+
+def test_find_site_in_text_finds_the_name_inside_a_longer_line() -> None:
+    assert find_site_in_text(TEXT) == "hwao_nmtj"
+    assert find_site_in_text("お客様 NIDEC ﾏｼﾝﾂｰﾙ(株) 御中\n個数 4") == "hwao_nmtj"
+    assert find_site_in_text("受注先 山田製作所株式会社\n部番 HR000000001") is None
+    assert find_site_in_text("") is None
+
+
+def test_customer_from_text_only_fills_an_unmapped_customer() -> None:
+    assert customer_from_text(_fields(customer="社"), TEXT).customer == NIDEC
+    assert customer_from_text(_fields(customer=None), TEXT).customer == NIDEC
+    assert customer_from_text(_fields(customer="X"), "個数 4").customer == "X"
+    assert customer_from_text(_fields(), "") == _fields()
+
+
+def test_ocr_llm_customer_from_text_option() -> None:
+    lost = {**_fields().model_dump(), "customer": "木村工業"}
+    pipeline = OcrLlmPipeline(
+        pipeline_id="A3HT",
+        ocr=_Ocr(),
+        llm=FakeOllamaAdapter([json.dumps(lost)]),
+        model="m",
+        instructions="i",
+        customer_from_text=True,
+    )
+    result = pipeline.extract(IMAGE)
+    assert result.fields is not None and result.fields.customer == NIDEC
+    assert describe_pipeline(pipeline)["customer_from_text"] == "on"

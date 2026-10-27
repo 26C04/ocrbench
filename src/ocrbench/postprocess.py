@@ -9,11 +9,20 @@ reproducible:
   is kept only when the LLM and the rules agree, when one of them is empty, or
   when exactly one of two different values has the customer's printed format.
   Otherwise the field is left empty, which sends the sheet to review.
+- ``customer_from_text``: when the customer field still maps to no EDI site,
+  the site's name is searched for in the whole Layer 1 text
+  (:func:`ocrbench.customers.find_site_in_text`).
 """
 
 from __future__ import annotations
 
-from ocrbench.customers import SITE_FORMATS, resolve_customer_site, snap_customer
+from ocrbench.customers import (
+    SITE_FORMATS,
+    canonical_name,
+    find_site_in_text,
+    resolve_customer_site,
+    snap_customer,
+)
 from ocrbench.edi_fields import EdiFields
 from ocrbench.normalize import strip_outer_whitespace
 
@@ -21,6 +30,16 @@ from ocrbench.normalize import strip_outer_whitespace
 def snapped(fields: EdiFields) -> EdiFields:
     """Return the fields with the customer snapped to a known name where it is close."""
     return fields.model_copy(update={"customer": snap_customer(fields.customer)})
+
+
+def customer_from_text(fields: EdiFields, text: str) -> EdiFields:
+    """Fill in the customer from the OCR text when the extracted one maps to no site."""
+    if resolve_customer_site(fields.customer) is not None:
+        return fields
+    site = find_site_in_text(text)
+    if site is None:
+        return fields
+    return fields.model_copy(update={"customer": canonical_name(site)})
 
 
 def _fits(site: str | None, name: str, value: str) -> bool:
