@@ -9,6 +9,9 @@ reproducible:
   is kept only when the LLM and the rules agree, when one of them is empty, or
   when exactly one of two different values has the customer's printed format.
   Otherwise the field is left empty, which sends the sheet to review.
+- ``agree`` (the ``agree`` pipeline kind): two reads of one sheet; the
+  customer comes from whichever maps to an EDI site, and each other field is
+  kept only when both reads agree or one is empty.
 - ``customer_from_text``: when the customer field still maps to no EDI site,
   the site's name is searched for in the whole Layer 1 text
   (:func:`ocrbench.customers.find_site_in_text`).
@@ -71,4 +74,25 @@ def cross_check(llm: EdiFields, rules: EdiFields) -> EdiFields:
         part_no=_pick_text(site, "part_no", llm.part_no, rules.part_no),
         order_no=_pick_text(site, "order_no", llm.order_no, rules.order_no),
         quantity=quantity,
+    )
+
+
+def _agreed[T](a: T | None, b: T | None) -> T | None:
+    if a is None or b is None:
+        return a if b is None else b
+    if isinstance(a, str) and isinstance(b, str):
+        return a if strip_outer_whitespace(a) == strip_outer_whitespace(b) else None
+    return a if a == b else None
+
+
+def agree(a: EdiFields | None, b: EdiFields | None) -> EdiFields | None:
+    """Combine two reads of one sheet; a field the reads disagree on is left empty."""
+    if a is None or b is None:
+        return a if b is None else b
+    mapped = [name for name in (a.customer, b.customer) if resolve_customer_site(name)]
+    return EdiFields(
+        customer=mapped[0] if mapped else a.customer,
+        part_no=_agreed(a.part_no, b.part_no),
+        order_no=_agreed(a.order_no, b.order_no),
+        quantity=_agreed(a.quantity, b.quantity),
     )

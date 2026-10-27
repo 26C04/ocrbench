@@ -49,6 +49,7 @@ from ocrbench.ocr_engines import (
 )
 from ocrbench.ollama_adapter import OllamaAdapter, TextLlm
 from ocrbench.pipelines import (
+    AgreePipeline,
     ExternalCommandPipeline,
     OcrEngine,
     OcrLlmPipeline,
@@ -64,6 +65,7 @@ _UNION_TAGS: Final = frozenset(
         "ocr_rules",
         "vision",
         "external",
+        "agree",
         "tesseract",
         "paddleocr",
         "qwen_vl",
@@ -168,14 +170,28 @@ class ExternalConfig(_PipelineBase):
     version: str = ""
 
 
+type _SingleConfig = Annotated[
+    OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig,
+    Field(discriminator="kind"),
+]
+
+
+class AgreeConfig(_PipelineBase):
+    """Two pipelines whose reads must agree (``AgreePipeline``)."""
+
+    kind: Literal["agree"]
+    first: _SingleConfig
+    second: _SingleConfig
+
+
 class _ConfigFile(_Strict):
     config: Annotated[
-        OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig,
+        OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig | AgreeConfig,
         Field(discriminator="kind"),
     ]
 
 
-type PipelineConfig = OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig
+type PipelineConfig = OcrLlmConfig | OcrRulesConfig | VisionConfig | ExternalConfig | AgreeConfig
 
 
 def parse_pipeline_config(text: str) -> PipelineConfig:
@@ -323,9 +339,23 @@ def build_pipeline(
                 version=config.version,
             )
             return BuiltPipeline(external, {}, False)
+        case AgreeConfig():
+            first, second = (
+                build_pipeline(part, adapter=adapter, prompt=prompt, confirm_cloud=confirm_cloud)
+                for part in (config.first, config.second)
+            )
+            both = AgreePipeline(
+                pipeline_id=config.pipeline_id, first=first.pipeline, second=second.pipeline
+            )
+            record = {
+                **{f"first.{key}": value for key, value in first.record.items()},
+                **{f"second.{key}": value for key, value in second.record.items()},
+            }
+            return BuiltPipeline(both, record, first.cloud or second.cloud)
 
 
 __all__ = [
+    "AgreeConfig",
     "BuiltPipeline",
     "ExternalConfig",
     "OcrLlmConfig",

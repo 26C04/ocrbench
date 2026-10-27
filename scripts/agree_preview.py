@@ -24,12 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ocrbench.config import OcrBenchError
-from ocrbench.customers import resolve_customer_site
 from ocrbench.edi_fields import EdiFields, compare_fields, format_problems
-from ocrbench.normalize import strip_outer_whitespace
 from ocrbench.pipeline_results import SheetResult, load_pipeline_run
 from ocrbench.pipeline_runner import load_edi_ground_truth
 from ocrbench.pipelines import PipelineStatus
+from ocrbench.postprocess import agree
 
 _FAILED = (PipelineStatus.ERROR, PipelineStatus.FORMAT_ERROR)
 
@@ -47,25 +46,8 @@ class AgreePreview:
     silent: int
 
 
-def _agree[T](a: T | None, b: T | None) -> T | None:
-    if a is None or b is None:
-        return a if b is None else b
-    if isinstance(a, str) and isinstance(b, str):
-        return a if strip_outer_whitespace(a) == strip_outer_whitespace(b) else None
-    return a if a == b else None
-
-
-def combine(a: EdiFields | None, b: EdiFields | None) -> EdiFields | None:
-    """Combine two reads of one sheet by the rule in the module docstring."""
-    if a is None or b is None:
-        return a if b is None else b
-    mapped = [name for name in (a.customer, b.customer) if resolve_customer_site(name)]
-    return EdiFields(
-        customer=mapped[0] if mapped else a.customer,
-        part_no=_agree(a.part_no, b.part_no),
-        order_no=_agree(a.order_no, b.order_no),
-        quantity=_agree(a.quantity, b.quantity),
-    )
+combine = agree
+"""The combination rule, shared with the ``agree`` pipeline kind."""
 
 
 def _ready(fields: EdiFields) -> bool:
@@ -93,7 +75,7 @@ def preview(run_a: Path, run_b: Path, data_root: Path) -> list[AgreePreview]:
         sheet_b = by_id[sheet_a.sheet_id]
         gt = load_edi_ground_truth(data_root, sheet_a.sheet_id)
         reads = (_usable(sheet_a), _usable(sheet_b))
-        for label, fields in zip(labels, (*reads, combine(*reads)), strict=True):
+        for label, fields in zip(labels, (*reads, agree(*reads)), strict=True):
             if fields is None:
                 continue
             right = compare_fields(gt, fields)

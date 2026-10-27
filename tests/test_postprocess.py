@@ -136,3 +136,35 @@ def test_ocr_llm_customer_from_text_option() -> None:
     result = pipeline.extract(IMAGE)
     assert result.fields is not None and result.fields.customer == NIDEC
     assert describe_pipeline(pipeline)["customer_from_text"] == "on"
+
+
+def test_agree_pipeline_keeps_only_what_both_reads_agree_on() -> None:
+    from ocrbench.pipelines import AgreePipeline, FakePipeline, PipelineResult
+
+    def result(fields: EdiFields | None, status: PipelineStatus) -> PipelineResult:
+        return PipelineResult(status, fields, "t", 1.0, 2.0, 3.0, 0.0, 1, ("raw",), None)
+
+    first = FakePipeline(
+        [
+            result(_fields(customer="社"), PipelineStatus.NEEDS_REVIEW),
+            result(_fields(order_no="000009-2026"), PipelineStatus.OK),
+            result(None, PipelineStatus.ERROR),
+        ],
+        pipeline_id="A",
+    )
+    second = FakePipeline(
+        [result(_fields(), PipelineStatus.OK)] * 2 + [result(None, PipelineStatus.ERROR)],
+        pipeline_id="B",
+    )
+    both = AgreePipeline(pipeline_id="AB", first=first, second=second)
+
+    rescued = both.extract(IMAGE)
+    assert rescued.status is PipelineStatus.OK and rescued.fields == _fields()
+    assert (rescued.total_ms, rescued.layer1_ms, rescued.attempts) == (6.0, 2.0, 2)
+    disputed = both.extract(IMAGE)
+    assert disputed.status is PipelineStatus.NEEDS_REVIEW
+    assert disputed.fields is not None and disputed.fields.order_no is None
+    failed = both.extract(IMAGE)
+    assert failed.status is PipelineStatus.ERROR and failed.fields is None
+    assert describe_pipeline(both)["kind"] == "agree"
+    assert describe_pipeline(both)["second.pipeline_id"] == "B"

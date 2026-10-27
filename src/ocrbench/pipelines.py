@@ -24,7 +24,7 @@ from ocrbench import config
 from ocrbench.edi_fields import EdiFields, edi_format_schema, format_problems, parse_edi_output
 from ocrbench.ollama_adapter import ChatResult, OllamaAdapter, TextLlm
 from ocrbench.parsing import ParseStatus, parse_model_output
-from ocrbench.postprocess import cross_check, customer_from_text, snapped
+from ocrbench.postprocess import agree, cross_check, customer_from_text, snapped
 from ocrbench.preprocess import PreprocessResult
 from ocrbench.schema import OrderDocument, ollama_format_schema
 
@@ -435,6 +435,60 @@ class _ExternalOutput(BaseModel):
     fields: EdiFields | None
     layer1_text: str | None = None
     cost_usd: float = Field(default=0.0, ge=0.0)
+
+
+def _sum(*values: float | None) -> float | None:
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
+
+
+class AgreePipeline:
+    """Two pipelines read each sheet; only what they agree on goes to the EDI.
+
+    The customer comes from whichever read maps to an EDI site, and part
+    number, order number and quantity are kept only when both reads agree or
+    one is empty (:func:`ocrbench.postprocess.agree`). A read that failed is
+    ignored; when both fail, the first read's error is reported.
+    """
+
+    def __init__(self, *, pipeline_id: str, first: Pipeline, second: Pipeline) -> None:
+        self._pipeline_id = pipeline_id
+        self._first = first
+        self._second = second
+
+    @property
+    def pipeline_id(self) -> str:
+        return self._pipeline_id
+
+    def describe(self) -> dict[str, str]:
+        return {
+            "kind": "agree",
+            "pipeline_id": self._pipeline_id,
+            **{f"first.{key}": value for key, value in self._first.describe().items()},
+            **{f"second.{key}": value for key, value in self._second.describe().items()},
+        }
+
+    def extract(self, image: PreprocessResult) -> PipelineResult:
+        a = self._first.extract(image)
+        b = self._second.extract(image)
+        failed = (PipelineStatus.ERROR, PipelineStatus.FORMAT_ERROR)
+        fields = agree(
+            None if a.status in failed else a.fields,
+            None if b.status in failed else b.fields,
+        )
+        texts = [text for text in (a.layer1_text, b.layer1_text) if text is not None]
+        return PipelineResult(
+            status=a.status if fields is None else _status_for(fields),
+            fields=fields,
+            layer1_text="\n".join(texts) if texts else None,
+            layer1_ms=_sum(a.layer1_ms, b.layer1_ms),
+            layer2_ms=_sum(a.layer2_ms, b.layer2_ms),
+            total_ms=a.total_ms + b.total_ms,
+            cost_usd=a.cost_usd + b.cost_usd,
+            attempts=a.attempts + b.attempts,
+            raw_outputs=(*a.raw_outputs, *b.raw_outputs),
+            error=(a.error or b.error) if fields is None else None,
+        )
 
 
 class ExternalCommandPipeline:
