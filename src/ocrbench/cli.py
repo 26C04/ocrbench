@@ -931,6 +931,11 @@ def _handle_run_all(arguments: argparse.Namespace) -> int:
         lines.append(render_leaderboard(board))
         if arguments.leaderboard_out is not None:
             payload["leaderboard"] = str(write_leaderboard(board, arguments.leaderboard_out))
+    elif done:
+        lines.append(
+            "Only one candidate finished, so no leaderboard was written. To rank it against"
+            " earlier runs: ocrbench leaderboard --run-dirs RUN_DIR [RUN_DIR ...]"
+        )
     _emit(arguments, payload, "\n".join(lines))
     return 0 if not failed else 1
 

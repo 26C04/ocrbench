@@ -82,6 +82,23 @@ def _runs(runs: Path) -> list[PipelineRunResults]:
     return [load_pipeline_run(path) for path in sorted(runs.iterdir())]
 
 
+def test_run_all_explains_how_to_rank_a_single_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    env: tuple[Path, Manifest, Path],
+) -> None:
+    root, manifest, _ = env
+    only = {"P": _candidates(root, manifest)["P"]}
+    path = _install(monkeypatch, only, tmp_path)[0]
+    out = tmp_path / "board.md"
+
+    arguments = ["run-all", "--pipelines", str(path), "--split", "dev", "--run-prefix", "one"]
+    assert main([*arguments, "--leaderboard-out", str(out)]) == 0
+    assert "ocrbench leaderboard --run-dirs" in capsys.readouterr().out
+    assert not out.exists()
+
+
 def test_run_all_continues_past_a_failure_and_ranks_the_rest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
