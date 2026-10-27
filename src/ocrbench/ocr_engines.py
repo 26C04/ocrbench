@@ -258,6 +258,18 @@ def keep_top_part(png_bytes: bytes, fraction: float | None) -> bytes:
     return out.getvalue()
 
 
+def enlarge(png_bytes: bytes, factor: float | None) -> bytes:
+    """Enlarge a PNG by ``factor`` so small print, such as half-width katakana, gets more pixels."""
+    if factor is None or factor <= 1.0:
+        return png_bytes
+    with Image.open(io.BytesIO(png_bytes)) as source:
+        size = (round(source.width * factor), round(source.height * factor))
+        resized = source.convert("RGB").resize(size, Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    resized.save(out, format="PNG")
+    return out.getvalue()
+
+
 def fit_long_side(png_bytes: bytes, max_side: int | None) -> bytes:
     """Shrink a PNG so its longer side is at most ``max_side`` pixels; smaller images pass as is.
 
@@ -292,6 +304,7 @@ class QwenVlTranscribeEngine:
         keep_top: float | None = None,
         repeat_retry: bool = False,
         plain_text: bool = False,
+        upscale: float | None = None,
     ) -> None:
         self._adapter = adapter
         self._model = model
@@ -302,6 +315,7 @@ class QwenVlTranscribeEngine:
         self._keep_top = keep_top
         self._repeat_retry = repeat_retry
         self._plain_text = plain_text
+        self._upscale = upscale
         self._digest: str | None = None
 
     @property
@@ -321,11 +335,13 @@ class QwenVlTranscribeEngine:
             **({"keep_top": str(self._keep_top)} if self._keep_top is not None else {}),
             **({"repeat_retry": str(REPEAT_RETRY_PENALTY)} if self._repeat_retry else {}),
             **({"output": "plain_text", "prompt": self._prompt} if self._plain_text else {}),
+            **({"upscale": str(self._upscale)} if self._upscale is not None else {}),
         }
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
         started = perf_counter_ns()
-        png = fit_long_side(keep_top_part(image.png_bytes, self._keep_top), self._max_side)
+        png = keep_top_part(image.png_bytes, self._keep_top)
+        png = fit_long_side(enlarge(png, self._upscale), self._max_side)
 
         def call(repeat_penalty: float | None) -> ChatResult:
             return self._adapter.generate_structured(

@@ -31,6 +31,7 @@ from ocrbench.ocr_engines import (
     PaddleOcrEngine,
     QwenVlTranscribeEngine,
     TesseractEngine,
+    enlarge,
     ensure_cloud_allowed,
     fit_long_side,
     keep_top_part,
@@ -557,3 +558,17 @@ def test_glm_ocr_plain_text_skips_the_json_schema() -> None:
         QwenVlTranscribeEngine(adapter=FakeOllamaAdapter(["  "]), plain_text=True).transcribe(
             _png(10, 10)
         )
+
+
+def test_upscale_enlarges_the_header_before_reading() -> None:
+    adapter = FakeOllamaAdapter(["text"])
+    engine = QwenVlTranscribeEngine(adapter=adapter, plain_text=True, keep_top=0.5, upscale=2.0)
+    page = _png(100, 200)
+
+    engine.transcribe(page)
+
+    assert adapter.calls[0].image_size == len(enlarge(keep_top_part(page.png_bytes, 0.5), 2.0))
+    with Image.open(io.BytesIO(enlarge(page.png_bytes, 2.0))) as big:
+        assert big.size == (200, 400)
+    assert enlarge(page.png_bytes, None) == page.png_bytes
+    assert engine.describe()["upscale"] == "2.0"

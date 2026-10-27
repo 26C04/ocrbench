@@ -105,6 +105,7 @@ class QwenVlConfig(_Strict):
     num_ctx: Annotated[int, Field(ge=2048, le=131072)] | None = None
     keep_top: Annotated[float, Field(gt=0.1, le=1.0)] | None = None
     repeat_retry: bool = False
+    upscale: Annotated[float, Field(gt=1.0, le=3.0)] | None = None
     output: Literal["json", "glm_ocr"] = "json"
     """``glm_ocr``: plain text with GLM-OCR's own prompt instead of the JSON transcription."""
 
@@ -241,6 +242,7 @@ def _ocr_engine(
                 repeat_retry=config.repeat_retry,
                 prompt=GLM_OCR_PROMPT if config.output == "glm_ocr" else TRANSCRIBE_PROMPT,
                 plain_text=config.output == "glm_ocr",
+                upscale=config.upscale,
             )
         case MistralConfig():
             return MistralOcrEngine(
