@@ -65,6 +65,7 @@ class RecordingAdapter:
         seed: int,
         temperature: float = 0.0,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
     ) -> ChatResult:
         index = len(self.calls)
         self.calls.append(

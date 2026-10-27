@@ -101,6 +101,8 @@ class QwenVlConfig(_Strict):
     model: str = "qwen2.5vl:7b"
     max_side: Annotated[int, Field(ge=448, le=8192)] | None = None
     num_ctx: Annotated[int, Field(ge=2048, le=131072)] | None = None
+    keep_top: Annotated[float, Field(gt=0.1, le=1.0)] | None = None
+    repeat_retry: bool = False
 
 
 class MistralConfig(_Strict):
@@ -230,6 +232,8 @@ def _ocr_engine(
                 model=config.model,
                 max_side=config.max_side,
                 num_ctx=config.num_ctx,
+                keep_top=config.keep_top,
+                repeat_retry=config.repeat_retry,
             )
         case MistralConfig():
             return MistralOcrEngine(

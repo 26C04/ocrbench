@@ -54,6 +54,7 @@ class _SmokeAdapter:
         seed: int,
         temperature: float = 0.0,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
     ) -> ChatResult:
         self.calls.append(
             {

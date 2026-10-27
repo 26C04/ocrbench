@@ -29,7 +29,7 @@ from PIL import Image, ImageChops, ImageFilter
 
 from ocrbench import config
 from ocrbench.config import OcrBenchError
-from ocrbench.ollama_adapter import OllamaAdapter
+from ocrbench.ollama_adapter import ChatResult, OllamaAdapter
 from ocrbench.pipelines import OcrResult, elapsed_ms
 from ocrbench.preprocess import PreprocessResult
 
@@ -236,6 +236,25 @@ _TRANSCRIBE_SCHEMA: Final[dict[str, Any]] = {
 }
 
 
+REPEAT_RETRY_PENALTY: Final[float] = 1.15
+
+
+def keep_top_part(png_bytes: bytes, fraction: float | None) -> bytes:
+    """Keep only the top ``fraction`` of an image, where the sheet's header fields are.
+
+    Transcribing a whole sheet makes the vision model copy the long process table,
+    where it can loop until Ollama aborts it; the 4 EDI fields are all in the header.
+    """
+    if fraction is None or fraction >= 1.0:
+        return png_bytes
+    with Image.open(io.BytesIO(png_bytes)) as source:
+        height = max(1, round(source.height * fraction))
+        top = source.convert("RGB").crop((0, 0, source.width, height))
+    out = io.BytesIO()
+    top.save(out, format="PNG")
+    return out.getvalue()
+
+
 def fit_long_side(png_bytes: bytes, max_side: int | None) -> bytes:
     """Shrink a PNG so its longer side is at most ``max_side`` pixels; smaller images pass as is.
 
@@ -267,6 +286,8 @@ class QwenVlTranscribeEngine:
         seed: int = config.SEED,
         max_side: int | None = None,
         num_ctx: int | None = None,
+        keep_top: float | None = None,
+        repeat_retry: bool = False,
     ) -> None:
         self._adapter = adapter
         self._model = model
@@ -274,6 +295,8 @@ class QwenVlTranscribeEngine:
         self._seed = seed
         self._max_side = max_side
         self._num_ctx = num_ctx
+        self._keep_top = keep_top
+        self._repeat_retry = repeat_retry
         self._digest: str | None = None
 
     @property
@@ -290,19 +313,34 @@ class QwenVlTranscribeEngine:
             "seed": str(self._seed),
             "max_side": "original" if self._max_side is None else str(self._max_side),
             "num_ctx": "default" if self._num_ctx is None else str(self._num_ctx),
+            **({"keep_top": str(self._keep_top)} if self._keep_top is not None else {}),
+            **({"repeat_retry": str(REPEAT_RETRY_PENALTY)} if self._repeat_retry else {}),
         }
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
         started = perf_counter_ns()
-        chat = self._adapter.generate_structured(
-            model=self._model,
-            prompt=self._prompt,
-            image_png=fit_long_side(image.png_bytes, self._max_side),
-            format_schema=dict(_TRANSCRIBE_SCHEMA),
-            seed=self._seed,
-            temperature=0.0,
-            num_ctx=self._num_ctx,
-        )
+        png = fit_long_side(keep_top_part(image.png_bytes, self._keep_top), self._max_side)
+
+        def call(repeat_penalty: float | None) -> ChatResult:
+            return self._adapter.generate_structured(
+                model=self._model,
+                prompt=self._prompt,
+                image_png=png,
+                format_schema=dict(_TRANSCRIBE_SCHEMA),
+                seed=self._seed,
+                temperature=0.0,
+                num_ctx=self._num_ctx,
+                repeat_penalty=repeat_penalty,
+            )
+
+        try:
+            chat = call(None)
+        except Exception as caught:
+            # Ollama aborts a transcription that loops ("token repeat limit reached");
+            # one retry with a repetition penalty usually gets past the long table.
+            if not (self._repeat_retry and "repeat" in str(caught)):
+                raise
+            chat = call(REPEAT_RETRY_PENALTY)
         try:
             decoded = json.loads(chat.content)
         except json.JSONDecodeError:

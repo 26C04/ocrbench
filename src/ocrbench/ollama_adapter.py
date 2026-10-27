@@ -65,10 +65,12 @@ class OllamaAdapter(Protocol):
         seed: int,
         temperature: float = 0.0,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
     ) -> ChatResult:
         """Generate one structured response without retries.
 
-        ``num_ctx`` overrides the model's context window; ``None`` keeps Ollama's default.
+        ``num_ctx`` overrides the model's context window and ``repeat_penalty`` its
+        repetition penalty; ``None`` keeps Ollama's default.
         """
 
     def resolve_digest(self, model: str) -> str:
@@ -118,6 +120,7 @@ class RealOllamaAdapter:
         seed: int,
         temperature: float = 0.0,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
     ) -> ChatResult:
         """Issue exactly one chat call and preserve the model's raw text output."""
         return self._chat(
@@ -127,6 +130,7 @@ class RealOllamaAdapter:
             seed=seed,
             temperature=temperature,
             num_ctx=num_ctx,
+            repeat_penalty=repeat_penalty,
         )
 
     def generate_structured_text(
@@ -156,10 +160,13 @@ class RealOllamaAdapter:
         seed: int,
         temperature: float,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
     ) -> ChatResult:
         options: dict[str, Any] = {"temperature": temperature, "seed": seed}
         if num_ctx is not None:
             options["num_ctx"] = num_ctx
+        if repeat_penalty is not None:
+            options["repeat_penalty"] = repeat_penalty
         response = self._client.chat(
             model=model,
             messages=[message],
@@ -246,6 +253,7 @@ class FakeOllamaAdapter:
         self._fully_on_gpu = fully_on_gpu
         self.calls: list[FakeCall] = []
         self.num_ctx_calls: list[int | None] = []
+        self.repeat_penalty_calls: list[float | None] = []
 
     @classmethod
     def always(cls, json_text: str) -> FakeOllamaAdapter:
@@ -264,9 +272,11 @@ class FakeOllamaAdapter:
         seed: int,
         temperature: float = 0.0,
         num_ctx: int | None = None,
+        repeat_penalty: float | None = None,
     ) -> ChatResult:
         """Record one call and return the next deterministic fake result."""
         self.num_ctx_calls.append(num_ctx)
+        self.repeat_penalty_calls.append(repeat_penalty)
         return self._respond(model, prompt, format_schema, seed, temperature, len(image_png))
 
     def generate_structured_text(

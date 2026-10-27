@@ -32,9 +32,10 @@ from ocrbench.ocr_engines import (
     TesseractEngine,
     ensure_cloud_allowed,
     fit_long_side,
+    keep_top_part,
     remove_ruling_lines,
 )
-from ocrbench.ollama_adapter import FakeOllamaAdapter
+from ocrbench.ollama_adapter import ChatResult, FakeOllamaAdapter
 from ocrbench.preprocess import PreprocessResult
 
 IMAGE = PreprocessResult(
@@ -206,6 +207,64 @@ def test_qwen_vl_shrinks_large_images_and_sets_the_context() -> None:
         assert shrunk.size == (1500, 1000)
     assert fit_long_side(page.png_bytes, 4000) == page.png_bytes
     assert fit_long_side(page.png_bytes, None) == page.png_bytes
+
+
+def _png(width: int, height: int) -> PreprocessResult:
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(buffer, format="PNG")
+    return PreprocessResult(
+        png_bytes=buffer.getvalue(),
+        width=width,
+        height=height,
+        source_kind="image",
+        duration_ms=0.0,
+        version="v1",
+    )
+
+
+def test_keep_top_part_crops_to_the_header() -> None:
+    page = _png(1000, 1400)
+    with Image.open(io.BytesIO(keep_top_part(page.png_bytes, 0.4))) as top:
+        assert top.size == (1000, 560)
+    assert keep_top_part(page.png_bytes, None) == page.png_bytes
+    assert keep_top_part(page.png_bytes, 1.0) == page.png_bytes
+
+
+class _LoopingOnce(FakeOllamaAdapter):
+    """Fail the first call the way Ollama aborts a looping generation."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__([json.dumps({"text": "t"})])
+        self.message = message
+
+    def generate_structured(self, **kwargs: Any) -> ChatResult:
+        if not self.repeat_penalty_calls:
+            self.repeat_penalty_calls.append(kwargs.get("repeat_penalty"))
+            raise RuntimeError(self.message)
+        return super().generate_structured(**kwargs)
+
+
+def test_qwen_vl_retries_once_with_a_penalty_after_a_repeat_abort() -> None:
+    adapter = _LoopingOnce("prediction aborted, token repeat limit reached (status code: 500)")
+    engine = QwenVlTranscribeEngine(adapter=adapter, keep_top=0.4, repeat_retry=True)
+
+    assert engine.transcribe(_png(100, 100)).text == "t"
+    assert adapter.repeat_penalty_calls == [None, 1.15]
+    assert engine.describe()["keep_top"] == "0.4"
+    assert engine.describe()["repeat_retry"] == "1.15"
+
+
+@pytest.mark.parametrize(
+    ("retry", "message"), [(False, "token repeat limit reached"), (True, "connection refused")]
+)
+def test_qwen_vl_raises_other_failures_without_retrying(retry: bool, message: str) -> None:
+    adapter = _LoopingOnce(message)
+    engine = QwenVlTranscribeEngine(adapter=adapter, repeat_retry=retry)
+
+    with pytest.raises(RuntimeError):
+        engine.transcribe(_png(10, 10))
+    assert adapter.repeat_penalty_calls == [None]
+    assert "repeat_retry" not in engine.describe() or retry
 
 
 @pytest.mark.parametrize("content", ["not json", "[]", '{"text": 1}', '{"text": "a", "extra": 1}'])
