@@ -1,0 +1,33 @@
+{
+  "kind": "agree",
+  "pipeline_id": "A3GC",
+  "first": {
+    "kind": "ocr_llm",
+    "pipeline_id": "A3G",
+    "ocr": {
+      "engine": "qwen_vl",
+      "model": "glm-ocr:latest",
+      "output": "glm_ocr",
+      "keep_top": 0.4,
+      "num_ctx": 12288,
+      "repeat_retry": true
+    },
+    "llm_model": "qwen3:8b",
+    "prompt_name": "edi-fields",
+    "snap_customer": true,
+    "rules_check": true
+  },
+  "second": {
+    "kind": "external",
+    "pipeline_id": "C",
+    "command": [
+      "uv",
+      "run",
+      "python",
+      "-m",
+      "scripts.harness_candidate"
+    ],
+    "timeout_s": 300,
+    "version": "automation-harness 59c51a3"
+  }
+}
