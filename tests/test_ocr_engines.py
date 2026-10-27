@@ -22,6 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 from ocrbench import config
 from ocrbench.ocr_engines import (
     DEFAULT_MISTRAL_USD_PER_PAGE,
+    GLM_OCR_PROMPT,
     MISTRAL_OCR_URL,
     TRANSCRIBE_PROMPT,
     CloudNotAllowedError,
@@ -540,3 +541,19 @@ def test_tesseract_remove_lines_option_changes_the_input_and_is_recorded(
     assert sent == remove_ruling_lines(image.png_bytes, min_run_px=40)
     assert engine.describe()["remove_lines"] == "min_run_px=40"
     assert TesseractEngine(runner=_FakeRunner()).__dict__["_remove_lines"] is False
+
+
+def test_glm_ocr_plain_text_skips_the_json_schema() -> None:
+    adapter = FakeOllamaAdapter(["受注先 Nidec\n個数 4"])
+    engine = QwenVlTranscribeEngine(
+        adapter=adapter, model="glm-ocr", prompt=GLM_OCR_PROMPT, plain_text=True
+    )
+
+    assert engine.transcribe(_png(10, 10)).text == "受注先 Nidec\n個数 4"
+    assert adapter.calls[0].schema == {}
+    assert adapter.calls[0].prompt == GLM_OCR_PROMPT
+    assert engine.describe()["output"] == "plain_text"
+    with pytest.raises(OcrEngineError, match="empty"):
+        QwenVlTranscribeEngine(adapter=FakeOllamaAdapter(["  "]), plain_text=True).transcribe(
+            _png(10, 10)
+        )

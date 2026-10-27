@@ -170,7 +170,8 @@ class RealOllamaAdapter:
         response = self._client.chat(
             model=model,
             messages=[message],
-            format=format_schema,
+            # An empty schema asks for plain text, which OCR-only models such as GLM-OCR need.
+            format=format_schema or None,
             options=options,
             think=False,
             stream=False,

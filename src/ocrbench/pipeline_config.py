@@ -39,6 +39,8 @@ from ocrbench.label_rules import OcrRulesPipeline
 from ocrbench.ocr_engines import (
     DEFAULT_LINE_MIN_RUN_PX,
     DEFAULT_MISTRAL_USD_PER_PAGE,
+    GLM_OCR_PROMPT,
+    TRANSCRIBE_PROMPT,
     MistralOcrEngine,
     PaddleOcrEngine,
     PdfTextLayerEngine,
@@ -103,6 +105,8 @@ class QwenVlConfig(_Strict):
     num_ctx: Annotated[int, Field(ge=2048, le=131072)] | None = None
     keep_top: Annotated[float, Field(gt=0.1, le=1.0)] | None = None
     repeat_retry: bool = False
+    output: Literal["json", "glm_ocr"] = "json"
+    """``glm_ocr``: plain text with GLM-OCR's own prompt instead of the JSON transcription."""
 
 
 class MistralConfig(_Strict):
@@ -235,6 +239,8 @@ def _ocr_engine(
                 num_ctx=config.num_ctx,
                 keep_top=config.keep_top,
                 repeat_retry=config.repeat_retry,
+                prompt=GLM_OCR_PROMPT if config.output == "glm_ocr" else TRANSCRIBE_PROMPT,
+                plain_text=config.output == "glm_ocr",
             )
         case MistralConfig():
             return MistralOcrEngine(

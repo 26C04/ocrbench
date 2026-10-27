@@ -238,6 +238,9 @@ _TRANSCRIBE_SCHEMA: Final[dict[str, Any]] = {
 
 REPEAT_RETRY_PENALTY: Final[float] = 1.15
 
+GLM_OCR_PROMPT: Final[str] = "Text Recognition:"
+"""GLM-OCR's own prompt for plain text; it answers in text, not in a JSON schema."""
+
 
 def keep_top_part(png_bytes: bytes, fraction: float | None) -> bytes:
     """Keep only the top ``fraction`` of an image, where the sheet's header fields are.
@@ -288,6 +291,7 @@ class QwenVlTranscribeEngine:
         num_ctx: int | None = None,
         keep_top: float | None = None,
         repeat_retry: bool = False,
+        plain_text: bool = False,
     ) -> None:
         self._adapter = adapter
         self._model = model
@@ -297,6 +301,7 @@ class QwenVlTranscribeEngine:
         self._num_ctx = num_ctx
         self._keep_top = keep_top
         self._repeat_retry = repeat_retry
+        self._plain_text = plain_text
         self._digest: str | None = None
 
     @property
@@ -315,6 +320,7 @@ class QwenVlTranscribeEngine:
             "num_ctx": "default" if self._num_ctx is None else str(self._num_ctx),
             **({"keep_top": str(self._keep_top)} if self._keep_top is not None else {}),
             **({"repeat_retry": str(REPEAT_RETRY_PENALTY)} if self._repeat_retry else {}),
+            **({"output": "plain_text", "prompt": self._prompt} if self._plain_text else {}),
         }
 
     def transcribe(self, image: PreprocessResult) -> OcrResult:
@@ -326,7 +332,7 @@ class QwenVlTranscribeEngine:
                 model=self._model,
                 prompt=self._prompt,
                 image_png=png,
-                format_schema=dict(_TRANSCRIBE_SCHEMA),
+                format_schema={} if self._plain_text else dict(_TRANSCRIBE_SCHEMA),
                 seed=self._seed,
                 temperature=0.0,
                 num_ctx=self._num_ctx,
@@ -341,6 +347,10 @@ class QwenVlTranscribeEngine:
             if not (self._repeat_retry and "repeat" in str(caught)):
                 raise
             chat = call(REPEAT_RETRY_PENALTY)
+        if self._plain_text:
+            if not chat.content.strip():
+                raise OcrEngineError("transcription was empty")
+            return OcrResult(text=chat.content, duration_ms=elapsed_ms(started))
         try:
             decoded = json.loads(chat.content)
         except json.JSONDecodeError:

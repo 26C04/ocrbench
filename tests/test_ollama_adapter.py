@@ -190,6 +190,7 @@ def test_real_adapter_maps_missing_chat_fields_safely(monkeypatch: pytest.Monkey
     )
 
     assert result.content == ""
+    assert client.chat.call_args.kwargs["format"] is None
     assert result.prompt_tokens is None
     assert result.output_tokens is None
     assert result.total_duration_ns is None

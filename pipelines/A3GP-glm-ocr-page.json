@@ -1,0 +1,9 @@
+{
+  "kind": "ocr_llm",
+  "pipeline_id": "A3GP",
+  "ocr": {"engine": "qwen_vl", "model": "glm-ocr", "output": "glm_ocr", "num_ctx": 12288, "repeat_retry": true},
+  "llm_model": "qwen3:8b",
+  "prompt_name": "edi-fields",
+  "snap_customer": true,
+  "rules_check": true
+}
